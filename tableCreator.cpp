@@ -11,7 +11,7 @@
 namespace fs = std::filesystem;
 using namespace std;
 
-Languages langueages;
+Languages languages;
 
 /*vector<uint16_t> charPolish = {211, 243, 260, 261, 262, 263, 280, 281, 321, 322, 323, 324, 346, 347, 377,
         378, 379, 380};
@@ -257,7 +257,7 @@ void writeDBCStables(uint16_t *dbcsroot[], ofstream &outStream, string name) {
 
 void processFile(const filesystem::path &path, ofstream &outStream) {
     uint16_t tab[128];
-    TagSets ts(langueages);
+    TagSets ts(languages);
     vector<pair<uint16_t, uint16_t>> bestv;
     ifstream infile(path);
     string name = path.stem().string();
@@ -275,7 +275,7 @@ void processFile12(const filesystem::path &path) {
     ofstream outStream((string)"../data/" + path.stem().string()+".h");
     uint16_t tab[128];
     uint16_t* dbcsroot[128];
-    TagSets ts(langueages);
+    TagSets ts(languages);
     vector<pair<uint16_t, uint16_t>> bestv;
     ifstream infile(path);
     readMBtable(infile, 256, tab, dbcsroot, bestv, ts);
@@ -290,7 +290,7 @@ void processFile12(const filesystem::path &path) {
 void processBest(const filesystem::path &path, ofstream &outStream) {
     string name = "cp" + path.stem().string().substr(7);
     uint16_t tab[128];
-    TagSets ts(langueages);
+    TagSets ts(languages);
     ifstream infile(path);
     int mbSize = 0;
     for (string line; getline(infile, line);) {
@@ -348,7 +348,7 @@ void processBest12(const filesystem::path &path) {
     string name = "cp" + path.stem().string().substr(7);
     uint16_t tab[128];
     uint16_t *dbcsroot[128];
-    TagSets ts(langueages);
+    TagSets ts(languages);
     ifstream infile(path);
     int mbSize = 0;
     for (string line; getline(infile, line);) {
@@ -535,7 +535,7 @@ void processAll() {
 }
 
 int main() {
-    langueages.readFromFile("../languages.txt");
+    languages.readFromFile("../languages.txt");
     processAll();
     return 0;
 }
