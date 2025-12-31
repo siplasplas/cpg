@@ -599,7 +599,10 @@ void processDir(const filesystem::path &dir) {
             string ext = str_tolower(entry.path().extension().string());
             if (ext != ".txt") continue;
             if (entry.path().stem().string() == "ReadMe") continue;
-            processFile(entry.path(), outStream);
+            if (entry.file_size() < 50000)
+                processFile(entry.path(), outStream);
+            else
+                processFile12(entry.path());
         }
     }
 }
@@ -657,6 +660,7 @@ void processAll() {
     processDir("../www.unicode.org/Public/MAPPINGS/ISO8859");
     processDir("../www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/MAC");
     processDir("../www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/PC");
+    processDir("../www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WINDOWS");
 }
 
 int main() {
