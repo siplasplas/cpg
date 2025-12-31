@@ -1,7 +1,7 @@
 #ifndef CPG_BIGTABLECODEPAGE_H
 #define CPG_BIGTABLECODEPAGE_H
 
-#include "Codepage.h"
+#include <cpg/Codepage.h>
 
 class BigTableCodepage: public Codepage {
 public:

@@ -26,6 +26,11 @@ public:
     int size();
     void readFromFile(const filesystem::path &path);
     unordered_set<uint16_t> alphabetToSet(int n);
+
+    // New methods for language-codepage mapping
+    vector<pair<string, string>> listAll();  // Returns pairs of (iso_code, name)
+    const Language* getByIsoCode(const string& iso);
+    vector<string> getCharsetsForLanguage(const string& iso);
 };
 
 #endif //CPG_LANGUAGE_H

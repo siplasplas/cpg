@@ -1,4 +1,4 @@
-#include "BigTableCodepage.h"
+#include <cpg/BigTableCodepage.h>
 
 int BigTableCodepage::minCharLen() {
     return 1;

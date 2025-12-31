@@ -1,7 +1,7 @@
 #ifndef CPG_UTFCODEPAGE_H
 #define CPG_UTFCODEPAGE_H
 
-#include "Codepage.h"
+#include <cpg/Codepage.h>
 
 class UtfCodepage: public Codepage {
     int width;

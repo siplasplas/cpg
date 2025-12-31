@@ -3,7 +3,7 @@
 
 #include <cstdint>
 #include <utility>
-#include "Codepage.h"
+#include <cpg/Codepage.h>
 
 class TableCodepage: public Codepage {
     uint16_t *convTable;

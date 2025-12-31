@@ -5,8 +5,8 @@
 #include <filesystem>
 #include <algorithm>
 #include <unordered_set>
-#include "Language.h"
-#include "utf/UTF.hpp"
+#include <cpg/Language.h>
+#include <utf/UTF.hpp>
 
 namespace fs = std::filesystem;
 using namespace std;
