@@ -479,44 +479,83 @@ void processBest12(const filesystem::path &path) {
 }
 
 void processApple(const filesystem::path &path, ofstream &outStream) {
+  uint16_t tab[128];
+  for (int i = 0; i < 128; i++) tab[i] = 0;
+  vector<pair<uint16_t, uint16_t>> bestv;
   string name = "cp" + path.stem().string();
-  cout << name << endl;
   ifstream infile(path);
   for (string line; getline(infile, line);) {
     line = trimRight(line);
     if (line.empty()) continue;
     if (line[0] == '#') continue;
-    cout << line << endl;
     int a, b;
     readTwoSimple(line, a, b);
-    printf("a=%d, b=%d\n", a,b);
-    if (a<128 && a!=b) {
-      // 0x5C->YEN is known for Japanese codepages
-      cerr << "Warning: " << name << " code mismatch for 0x" << hex << a << " -> 0x" << b << dec << endl;
-    }
+    if (a >= 128)
+      tab[a - 128] = b;
+    else if (a != b)
+      bestv.emplace_back(make_pair(b, a));
   }
+  writeTab(tab, outStream, name);
+  if (bestv.size() > 0)
+    writeBestTab(bestv, outStream, "b" + name);
+  cout << path.filename() << endl;
+  fs::remove(path);
 }
 
 void processAppleDir(const filesystem::path &path, ofstream &outStream) {
+  uint16_t tab[128];
+  for (int i = 0; i < 128; i++) tab[i] = 0;
+  vector<pair<uint16_t, uint16_t>> bestv;
   string name = "cp" + path.stem().string();
-  cout << name << endl;
   ifstream infile(path);
   for (string line; getline(infile, line);) {
     line = trimRight(line);
     if (line.empty()) continue;
     if (line[0] == '#') continue;
-    cout << line << endl;
     int a, b;
     Directionality dir;
     readTwoWithDirectionality(line, a, b, dir);
-    printf("a=%d, b=%d\n", a,b);
-    if (a<128 && a!=b)
-      throw runtime_error("mismatch code for <128");
+    if (a >= 128)
+      tab[a - 128] = b;
+    else if (a != b)
+      bestv.emplace_back(make_pair(b, a));
   }
+  writeTab(tab, outStream, name);
+  if (bestv.size() > 0)
+    writeBestTab(bestv, outStream, "b" + name);
+  cout << path.filename() << endl;
+  fs::remove(path);
 }
 
 void processApple12(const filesystem::path &path) {
 
+}
+
+void processGSM(const filesystem::path &path, ofstream &outStream) {
+  uint16_t tab[128];      // podstawowa tablica 7-bit
+  uint16_t tabExt[128];   // rozszerzenia przez ESC (0x1Bxx)
+  for (int i = 0; i < 128; i++) { tab[i] = 0; tabExt[i] = 0; }
+
+  ifstream infile(path);
+  for (string line; getline(infile, line);) {
+    line = trimRight(line);
+    if (line.empty()) continue;
+    if (line[0] == '#') continue;
+    int a, b;
+    readTwoSimple(line, a, b);
+    if (a < 128)
+      tab[a] = b;
+    else if ((a >> 8) == 0x1B) // rozszerzenie ESC
+      tabExt[a & 0x7F] = b;
+  }
+  outStream << "uint16_t GSM[128] = ";
+  writeTabContent(128, tab, outStream);
+  outStream << ";" << endl;
+  outStream << "uint16_t GSMext[128] = ";
+  writeTabContent(128, tabExt, outStream);
+  outStream << ";" << endl;
+  cout << path.filename() << endl;
+  fs::remove(path);
 }
 
 void searchDirectories(const fs::path &directory) {
@@ -661,6 +700,12 @@ void processAll() {
     processDir("../www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/MAC");
     processDir("../www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/PC");
     processDir("../www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WINDOWS");
+    // GSM 7-bit SMS encoding
+    fs::path gsmPath = "../www.unicode.org/Public/MAPPINGS/ETSI/GSM0338.TXT";
+    if (fs::exists(gsmPath)) {
+        ofstream outStream("../data/GSM.h");
+        processGSM(gsmPath, outStream);
+    }
 }
 
 int main() {
