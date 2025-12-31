@@ -5,6 +5,8 @@ add_definitions("-Werror=return-type -Werror=unused-result")
 
 set(CMAKE_CXX_STANDARD 17)
 
+include_directories(utf/include)
+
 add_executable(tableCreator tableCreator.cpp
         Language.h
         Language.cpp)

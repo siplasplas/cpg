@@ -21,16 +21,16 @@ UtfCodepage::UtfCodepage(std::string name, int width, bool binEndian) : Codepage
 std::u32string UtfCodepage::toU32(std::string_view str) {
     UTF utf;
     switch (width) {
-        case 1: return utf.u8to32(str);
+        case 1: return utf.toUTF32(str);
         case 2: {
             u16string_view sv16((char16_t*)str.data(), str.size()/2);
             if (!binEndian)
-                return utf.u16to32(sv16);
+                return UTF::toUTF32(sv16);
             else {
                 std::u16string str16;
                 str16 = sv16;
                 UTF::swapIt(str16);
-                return utf.u16to32(str16);
+                return UTF::toUTF32(str16);
             }
         }
         case 4: {
@@ -49,10 +49,10 @@ std::string UtfCodepage::fromU32(u32string_view sv32) {
     UTF utf;
     switch (width) {
         case 1: {
-            return utf.u32to8(sv32);
+            return utf.fromUTF32(sv32);
         }
         case 2: {
-            std::u16string str16 = utf.u32to16(sv32);
+            std::u16string str16 = utf.fromUTF32to16(sv32);
             if (binEndian)
                 UTF::swapIt(str16);
             std::string_view sv8((char *) str16.c_str(), str16.size() * 2);

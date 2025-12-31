@@ -56,7 +56,7 @@ void Language::read(ifstream &inStream) {
     getline(inStream, line);
     getline(inStream, line);
     UTF utf;
-    alphabet = utf.u8to16(subQuotes(line));
+    alphabet = utf.toUTF16(subQuotes(line));
     assert(key(line) == "alphabet");
 }
 
