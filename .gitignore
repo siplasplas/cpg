@@ -1,4 +1,5 @@
-/www.unicode.org/
+data
+www.unicode.org*
 .idea/
 *build*/
 

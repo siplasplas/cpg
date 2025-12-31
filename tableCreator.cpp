@@ -13,6 +13,8 @@ using namespace std;
 
 Languages languages;
 
+enum class Directionality {None, LR, RL};
+
 /*vector<uint16_t> charPolish = {211, 243, 260, 261, 262, 263, 280, 281, 321, 322, 323, 324, 346, 347, 377,
         378, 379, 380};
 vector<uint16_t> charNordic = {0x100, 0x12e, 0x10c, 0x118, 0x116, 0x145, 0x14c, 0x168, 0x172, 0x101, 0x12f, 0x10d,
@@ -91,6 +93,59 @@ std::string str_tolower(std::string s) {
 }
 
 int counter = 0;
+void readTwoSimple(const string &line, int &a, int &b) {
+  int pos1 = line.find('\t');
+  if (pos1 < 0)
+    pos1 = line.find("  ");
+  if (pos1 < 0)
+    throw runtime_error("can't read two hex integers");
+  string s1 = line.substr(0, pos1);
+  size_t idx;
+  a = stoi(s1, &idx, 16);
+  int pos2start = pos1 + 1;
+  int pos2 = line.find('\t', pos2start);
+  string s2;
+  if (pos2 < 0)
+    pos2 = line.find("  ", pos2start);
+  if (pos2 < 0)
+    pos2 = line.length();
+  s2 = line.substr(pos2start, pos2 - pos2start);
+  s2 = trim(s2);
+  b = stoi(s2, &idx, 16);
+}
+
+void readTwoWithDirectionality(const string &line, int &a, int &b, Directionality &dir) {
+  int pos1 = line.find('\t');
+  if (pos1 < 0)
+    pos1 = line.find("  ");
+  if (pos1 < 0)
+    throw runtime_error("can't read two hex integers");
+  string s1 = line.substr(0, pos1);
+  size_t idx;
+  a = stoi(s1, &idx, 16);
+  int pos2start = pos1 + 1;
+  int pos2 = line.find('\t', pos2start);
+  string s2;
+  if (pos2 < 0)
+    pos2 = line.find("  ", pos2start);
+  if (pos2 < 0)
+    pos2 = line.length();
+  s2 = line.substr(pos2start, pos2 - pos2start);
+  s2 = trim(s2);
+  if (s2.substr(0, 4) == "<LR>") {
+    dir = Directionality::LR;
+    s2 = s2.substr(5); // skip "<LR>+"
+    b = stoi(s2, &idx, 16);
+  } else if (s2.substr(0, 4) == "<RL>") {
+    dir = Directionality::RL;
+    s2 = s2.substr(5); // skip "<RL>+"
+    b = stoi(s2, &idx, 16);
+  } else {
+    b = stoi(s2, &idx, 16);
+    dir = Directionality::None;
+  }
+}
+
 bool readTwo(const string &line, int &a, int &b) {
     counter++;
     int pos1 = line.find('\t');
@@ -262,6 +317,7 @@ void processFile(const filesystem::path &path, ofstream &outStream) {
         writeBestTab(bestv, outStream, "b" + name);
     cout << path.filename() << ": ";
     ts.print_empty();
+    fs::remove(path);
 }
 
 //1 or 2 bytes for code
@@ -279,6 +335,7 @@ void processFile12(const filesystem::path &path) {
     writeDBCStables(dbcsroot, outStream, "d" + name);
     if (bestv.size()>0)
         writeBestTab(bestv, outStream, "b" + name);
+    fs::remove(path);
 }
 
 void processBest(const filesystem::path &path, ofstream &outStream) {
@@ -335,6 +392,7 @@ void processBest(const filesystem::path &path, ofstream &outStream) {
     writeBestTab(bestv, outStream, "b" + name);
     cout << path.filename() << ": ";
     ts.print_empty();
+  fs::remove(path);
 }
 
 void processBest12(const filesystem::path &path) {
@@ -417,6 +475,48 @@ void processBest12(const filesystem::path &path) {
     writeTab(tab, outStream, name);
     writeDBCStables(dbcsroot, outStream, "d" + name);
     writeBestTab(bestv, outStream, "b" + name);
+  fs::remove(path);
+}
+
+void processApple(const filesystem::path &path, ofstream &outStream) {
+  string name = "cp" + path.stem().string();
+  cout << name << endl;
+  ifstream infile(path);
+  for (string line; getline(infile, line);) {
+    line = trimRight(line);
+    if (line.empty()) continue;
+    if (line[0] == '#') continue;
+    cout << line << endl;
+    int a, b;
+    readTwoSimple(line, a, b);
+    printf("a=%d, b=%d\n", a,b);
+    if (a<128 && a!=b) {
+      // 0x5C->YEN is known for Japanese codepages
+      cerr << "Warning: " << name << " code mismatch for 0x" << hex << a << " -> 0x" << b << dec << endl;
+    }
+  }
+}
+
+void processAppleDir(const filesystem::path &path, ofstream &outStream) {
+  string name = "cp" + path.stem().string();
+  cout << name << endl;
+  ifstream infile(path);
+  for (string line; getline(infile, line);) {
+    line = trimRight(line);
+    if (line.empty()) continue;
+    if (line[0] == '#') continue;
+    cout << line << endl;
+    int a, b;
+    Directionality dir;
+    readTwoWithDirectionality(line, a, b, dir);
+    printf("a=%d, b=%d\n", a,b);
+    if (a<128 && a!=b)
+      throw runtime_error("mismatch code for <128");
+  }
+}
+
+void processApple12(const filesystem::path &path) {
+
 }
 
 void searchDirectories(const fs::path &directory) {
@@ -451,10 +551,12 @@ void ebcdic(bool hi, const filesystem::path &path, ofstream &outStream) {
     else
         name = "ecbdic";
     writeTab(tab, outStream, name);
+    fs::remove(path);
 }
 
 void ebcdicDir() {
     fs::path dir = "../www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/EBCDIC";
+    if (!fs::exists(dir)) return;
     ofstream outStream((string)"../data/" + "ecbdic.h");
     ebcdic(false, dir / "CP500.TXT", outStream);
     for (const auto &entry: fs::directory_iterator(dir)) {
@@ -490,6 +592,7 @@ void miscDir() {
 }
 
 void processDir(const filesystem::path &dir) {
+    if (!fs::exists(dir)) return;
     ofstream outStream((string)"../data/" + dir.filename().string() + ".h");
     for (const auto &entry: fs::directory_iterator(dir)) {
         if (!entry.is_directory()) {
@@ -503,6 +606,7 @@ void processDir(const filesystem::path &dir) {
 
 void bestFitDir() {
     fs::path dir = "../www.unicode.org/Public/MAPPINGS/VENDORS/MICSFT/WindowsBestFit";
+    if (!fs::exists(dir)) return;
     ofstream outStream((string)"../data/" + "bestFit.h");
     for (const auto &entry: fs::directory_iterator(dir)) {
         if (!entry.is_directory()) {
@@ -518,9 +622,36 @@ void bestFitDir() {
     }
 }
 
+
+void AppleDir() {
+  fs::path dir = "../www.unicode.org/Public/MAPPINGS/VENDORS/APPLE";
+  if (!fs::exists(dir)) return;
+  ofstream outStream((string)"../data/" + "Apple.h");
+  for (const auto &entry: fs::directory_iterator(dir)) {
+    if (!entry.is_directory()) {
+      string ext = str_tolower(entry.path().extension().string());
+      if (ext != ".txt") continue;
+      string stem = entry.path().stem().string();
+      if (str_tolower(stem) == "readme") continue;
+      if (stem == "KEYBOARD") continue; // special symbol table, not a codepage
+      if (stem == "SYMBOL") continue;   // special symbol table, not a codepage
+      if (stem == "DINGBATS") continue; // special symbol table, not a codepage
+      if (stem == "CORPCHAR") continue; // corporate characters list, not a codepage
+      if (entry.file_size() < 72000) {
+        if (stem=="HEBREW" || stem=="ARABIC" || stem=="FARSI")
+          processAppleDir(entry.path(), outStream);
+        else
+          processApple(entry.path(), outStream);
+      } else
+        processApple12(entry.path());
+    }
+  }
+}
+
 void processAll() {
     fs::create_directories("../data");
     bestFitDir();
+    AppleDir();
     ebcdicDir();
     miscDir();
     processDir("../www.unicode.org/Public/MAPPINGS/ISO8859");
