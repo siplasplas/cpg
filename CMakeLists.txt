@@ -28,3 +28,19 @@ target_link_libraries(convcp cpg)
 # tableCreator (narzędzie do generowania tablic)
 add_executable(tableCreator tableCreator.cpp)
 target_link_libraries(tableCreator cpg)
+
+# Testy (GoogleTest)
+option(CPG_BUILD_TESTS "Build unit tests" ON)
+if(CPG_BUILD_TESTS)
+    find_package(GTest REQUIRED)
+    enable_testing()
+    add_executable(cpg_tests
+            test/UtfCodepageTest.cpp
+            test/CpManagerTest.cpp
+            test/LanguageTest.cpp)
+    target_link_libraries(cpg_tests cpg GTest::gtest GTest::gtest_main)
+    target_compile_definitions(cpg_tests PRIVATE
+            CPG_LANGUAGES_TXT="${CMAKE_CURRENT_SOURCE_DIR}/languages.txt")
+    include(GoogleTest)
+    gtest_discover_tests(cpg_tests)
+endif()
