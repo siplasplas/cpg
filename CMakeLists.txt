@@ -5,6 +5,8 @@ add_definitions("-Werror=return-type -Werror=unused-result")
 
 set(CMAKE_CXX_STANDARD 17)
 
+find_package(ICU REQUIRED COMPONENTS uc i18n)
+
 # Biblioteka cpg
 add_library(cpg STATIC
         src/Codepage.cpp
@@ -14,7 +16,8 @@ add_library(cpg STATIC
         src/CpManager.cpp
         src/Language.cpp)
 
-target_include_directories(cpg PUBLIC include utf/include)
+target_include_directories(cpg PUBLIC include)
+target_link_libraries(cpg PUBLIC ICU::uc ICU::i18n)
 
 # Demo konwerter
 add_executable(convcp

@@ -11,7 +11,7 @@ public:
     int minCharLen() override;
     int maxCharLen() override;
     std::u32string toU32(std::string_view str) override;
-    std::string fromU32(u32string_view sv32) override;
+    std::string fromU32(std::u32string_view sv32) override;
 };
 
 

@@ -2,7 +2,7 @@
 #define CPG_CODEPAGE_H
 
 #include <string>
-#include <utf/UTF.hpp>
+#include <string_view>
 
 class Codepage {
 protected:
@@ -12,7 +12,7 @@ public:
     virtual int minCharLen() = 0;
     virtual int maxCharLen() = 0;
     virtual std::u32string toU32(std::string_view str) = 0;
-    virtual std::string fromU32(u32string_view dstr) = 0;
+    virtual std::string fromU32(std::u32string_view dstr) = 0;
     const std::string& getName() const { return name; }
 };
 

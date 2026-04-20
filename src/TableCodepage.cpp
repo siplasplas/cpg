@@ -35,7 +35,7 @@ std::u32string TableCodepage::toU32(std::string_view str) {
     return result;
 }
 
-std::string TableCodepage::fromU32(u32string_view dstr) {
+std::string TableCodepage::fromU32(std::u32string_view dstr) {
     std::string result;
     result.reserve(dstr.size());
     for (char32_t c : dstr) {

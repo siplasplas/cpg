@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <unordered_set>
 #include <cpg/Language.h>
-#include <utf/UTF.hpp>
 
 namespace fs = std::filesystem;
 using namespace std;
@@ -172,7 +171,7 @@ bool readTwo(const string &line, int &a, int &b) {
             b = a;
             return true;
         } else {
-            b = UTF::REPLACEMENT;
+            b = 0xFFFD;
             return false;
         }
     } else

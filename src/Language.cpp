@@ -4,8 +4,10 @@
 
 #include <fstream>
 #include <iostream>
+#include <cassert>
 #include <cpg/Language.h>
-#include <utf/UTF.hpp>
+#include <unicode/utypes.h>
+#include <unicode/ustring.h>
 
 using namespace std;
 
@@ -72,8 +74,16 @@ void Language::read(ifstream &inStream) {
     getline(inStream, line);  // charsets
     charsets = parseCharsets(line);
     getline(inStream, line);  // alphabet
-    UTF utf;
-    alphabet = utf.toUTF16(subQuotes(line));
+    {
+        string src = subQuotes(line);
+        UErrorCode status = U_ZERO_ERROR;
+        int32_t destLen = 0;
+        u_strFromUTF8(nullptr, 0, &destLen, src.data(), (int32_t) src.size(), &status);
+        status = U_ZERO_ERROR;
+        alphabet.assign((size_t) destLen, 0);
+        u_strFromUTF8(reinterpret_cast<UChar*>(alphabet.data()), destLen, nullptr,
+                      src.data(), (int32_t) src.size(), &status);
+    }
     assert(key(line) == "alphabet");
 }
 
