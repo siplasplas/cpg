@@ -127,7 +127,7 @@ alphabet="",
 name="Polish",
 iso_code="pl",
 use_ascii=False,
-charsets=["ISO-8859-2", "WINDOWS-1250"],
+charsets=["WINDOWS-1250", "ISO-8859-2", "ISO-8859-16", "CP852", "MAC-LATIN2", "MAZOVIA", "DHN", "CSK", "CYFROMAT", "IINTE-ISIS", "IEA-SWIERK", "LOGIC-PL", "MICROVEX", "VENTURA-PL", "FIDO-MAZOVIA", "SMC", "ELWRO-JUNIOR", "ATARI-CALAMUS", "CORELDRAW-PL", "COREL2-PL", "ATM-PL", "TEXPL", "AMIGAPL", "AMIGA-FAT", "AMIGA-XJP", "MAC-PL"],
 alphabet="AĄBCĆDEĘFGHIJKLŁMNŃOÓPRSŚTUWYZŹŻaąbcćdeęfghijklłmnńoóprsśtuwyzźż",
 
 name="Portuguese",

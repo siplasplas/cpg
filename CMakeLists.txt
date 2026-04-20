@@ -14,7 +14,9 @@ add_library(cpg STATIC
         src/BigTableCodepage.cpp
         src/UtfCodepage.cpp
         src/CpManager.cpp
-        src/Language.cpp)
+        src/PolishDosCodepages.cpp
+        src/Language.cpp
+        src/Detector.cpp)
 
 target_include_directories(cpg PUBLIC include)
 target_link_libraries(cpg PUBLIC ICU::uc ICU::i18n)
@@ -37,7 +39,8 @@ if(CPG_BUILD_TESTS)
     add_executable(cpg_tests
             test/UtfCodepageTest.cpp
             test/CpManagerTest.cpp
-            test/LanguageTest.cpp)
+            test/LanguageTest.cpp
+            test/DetectorTest.cpp)
     target_link_libraries(cpg_tests cpg GTest::gtest GTest::gtest_main)
     target_compile_definitions(cpg_tests PRIVATE
             CPG_LANGUAGES_TXT="${CMAKE_CURRENT_SOURCE_DIR}/languages.txt")

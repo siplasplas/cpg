@@ -3,6 +3,7 @@
 #include <cpg/CpManager.h>
 #include <cpg/UtfCodepage.h>
 #include <cpg/TableCodepage.h>
+#include <cpg/PolishDosCodepages.h>
 
 // Include all codepage tables
 #include "../data/ISO8859.h"
@@ -118,6 +119,11 @@ CpManager::CpManager() {
     // Misc
     codepages.emplace_back(new TableCodepage("atarist", ATARIST));
     codepages.emplace_back(new TableCodepage("kz1048", KZ1048));
+
+    // Polish DOS / exotic codepages (built by overlaying 18 Polish positions
+    // onto a base table: CP437 for DOS, ISO-8859-1 for Amiga, Mac Roman for Mac)
+    for (Codepage* cp : makePolishDosCodepages())
+        codepages.emplace_back(cp);
 }
 
 Codepage* CpManager::getByName(const std::string& name) {
