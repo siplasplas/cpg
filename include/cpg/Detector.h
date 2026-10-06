@@ -9,7 +9,7 @@
 
 struct DetectionResult {
     std::string codepage;
-    double score;    // 0..1, alphabet-coverage heuristic
+    double score;    // 0..1: ICU confidence for Unicode; alphabet coverage otherwise
     int rank;        // lower = more "normal" (Windows/ISO/UTF)
 };
 
@@ -19,8 +19,10 @@ class Detector {
 public:
     Detector(CpManager& cpm, Languages& langs);
 
-    // Mode 1: language is known, rank candidate codepages by coverage.
-    // Result is sorted by score desc; ties broken by rank asc.
+    // First accept ICU's best match if it is valid UTF-8/16/32 with confidence
+    // >= 80 (language-independent). Otherwise rank the language's codepages
+    // by alphabet coverage. Empty input returns no candidates.
+    // Fallback results are sorted by score desc; ties broken by rank asc.
     std::vector<DetectionResult> detectCodepage(const std::string& iso,
                                                 std::string_view bytes);
 

@@ -31,6 +31,60 @@ const std::u32string kPolishText =
     U"Zażółć gęślą jaźń. Polski tekst zawiera wiele znaków diakrytycznych "
     U"takich jak ą, ć, ę, ł, ń, ó, ś, ź, ż. To jest test detekcji kodowania.";
 
+TEST_F(DetectorFixture, IcuDetectsUnicodeWithAndWithoutBom) {
+    for (const std::string cp : {"utf8", "utf16", "utf16be", "utf32", "utf32be"}) {
+        for (bool bom : {false, true}) {
+            SCOPED_TRACE(cp + (bom ? " with BOM" : " without BOM"));
+            const auto text = bom ? std::u32string(U"\uFEFF") + kPolishText : kPolishText;
+            auto results = detector->detectCodepage("pl", encodeAs(text, cp));
+            ASSERT_EQ(results.size(), 1u);
+            EXPECT_EQ(results[0].codepage, cp);
+            EXPECT_EQ(results[0].rank, 0);
+            EXPECT_GE(results[0].score, 0.8);
+        }
+    }
+}
+
+TEST_F(DetectorFixture, UnicodeDetectionDoesNotRequireKnownLanguage) {
+    auto results = detector->detectCodepage("zz-unknown", encodeAs(kPolishText, "utf8"));
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].codepage, "utf8");
+}
+
+TEST_F(DetectorFixture, EmptyInputReturnsEmpty) {
+    EXPECT_TRUE(detector->detectCodepage("pl", "").empty());
+}
+
+TEST_F(DetectorFixture, LegacyEncodingsUseFallback) {
+    for (const std::string cp : {"cp1250", "iso-8859-2", "cp852", "mazovia"}) {
+        SCOPED_TRACE(cp);
+        auto results = detector->detectCodepage("pl", encodeAs(kPolishText, cp));
+        ASSERT_GT(results.size(), 1u);
+        EXPECT_EQ(results[0].codepage, cp);
+    }
+}
+
+TEST_F(DetectorFixture, BetterIso88592ScoreIsNotOverriddenByCp1250Preference) {
+    const std::u32string text =
+        U"Dzień dobry. Przesyłam zestawienie kosztów za wrzesień. Proszę o sprawdzenie "
+        U"dokumentów i przesłanie odpowiedzi do piątku. Dziękuję za pomoc.";
+    auto results = detector->detectCodepage("pl", encodeAs(text, "iso-8859-2"));
+    ASSERT_GT(results.size(), 1u);
+    EXPECT_EQ(results[0].codepage, "iso-8859-2");
+}
+
+TEST_F(DetectorFixture, MalformedUnicodeUsesFallback) {
+    for (const std::string cp : {"utf8", "utf16", "utf16be", "utf32", "utf32be"}) {
+        SCOPED_TRACE(cp);
+        auto bytes = encodeAs(std::u32string(U"\uFEFF") + kPolishText, cp);
+        if (cp == "utf8") bytes.push_back(char(0xFF));
+        else bytes.pop_back();
+        auto results = detector->detectCodepage("pl", bytes);
+        ASSERT_GT(results.size(), 1u);
+        EXPECT_NE(results[0].rank, 0);
+    }
+}
+
 TEST_F(DetectorFixture, NewCodepagesRegistered) {
     EXPECT_NE(cpManager.getByName("mazovia"), nullptr);
     EXPECT_NE(cpManager.getByName("dhn"), nullptr);
@@ -81,12 +135,12 @@ TEST_F(DetectorFixture, MazoviaEncodedTextFavorsMazovia) {
 }
 
 TEST_F(DetectorFixture, TieBreakPrefersNormalOverExotic) {
-    // ASCII-only text: all codepages score equally on alphabet coverage
-    // (no Polish chars hit, only ASCII which is "common"). Rank tie-break
-    // must favor cp1250/ISO over Mazovia/DHN.
+    // ASCII provides weak evidence for ICU. Fall back to alphabet coverage,
+    // with rank breaking ties between compatible legacy codepages.
     std::string ascii = "Hello world, this is pure ASCII text.";
     auto results = detector->detectCodepage("pl", ascii);
     ASSERT_FALSE(results.empty());
+    EXPECT_GT(results.size(), 1u);
     // Top result must be a rank-1 codepage (cp1250 or iso-8859-*)
     EXPECT_LE(results[0].rank, 2);
 }
@@ -113,9 +167,8 @@ TEST_F(DetectorFixture, ResultsAreSortedByScoreThenRank) {
     for (size_t i = 1; i < results.size(); i++) {
         const auto& a = results[i-1];
         const auto& b = results[i];
-        // either score strictly greater, or (close scores AND rank <=)
-        bool ok = (a.score > b.score + 0.02) ||
-                  (std::abs(a.score - b.score) <= 0.02 && a.rank <= b.rank);
+        bool ok = (a.score > b.score) ||
+                  (a.score == b.score && a.rank <= b.rank);
         EXPECT_TRUE(ok) << "pos " << i
                         << ": " << a.codepage << "(" << a.score << ",r" << a.rank
                         << ") vs " << b.codepage << "(" << b.score << ",r" << b.rank << ")";

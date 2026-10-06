@@ -2,9 +2,59 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
+#include <memory>
+#include <optional>
 #include <unordered_set>
+#include <unicode/ucnv.h>
+#include <unicode/ucnv_err.h>
+#include <unicode/ucsdet.h>
 
 namespace {
+
+std::optional<DetectionResult> detectUnicode(std::string_view bytes) {
+    if (bytes.empty() || bytes.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max()))
+        return std::nullopt;
+
+    UErrorCode status = U_ZERO_ERROR;
+    std::unique_ptr<UCharsetDetector, decltype(&ucsdet_close)> detector(
+        ucsdet_open(&status), &ucsdet_close);
+    if (U_FAILURE(status) || !detector) return std::nullopt;
+    ucsdet_setText(detector.get(), bytes.data(), static_cast<int32_t>(bytes.size()), &status);
+    const UCharsetMatch* match = ucsdet_detect(detector.get(), &status);
+    if (U_FAILURE(status) || !match) return std::nullopt;
+
+    const char* name = ucsdet_getName(match, &status);
+    const int confidence = ucsdet_getConfidence(match, &status);
+    // Weak guesses (including plain ASCII) should reach the codepage fallback.
+    constexpr int minimumConfidence = 80;
+    if (U_FAILURE(status) || !name || confidence < minimumConfidence)
+        return std::nullopt;
+
+    std::string canonical;
+    const std::string icuName(name);
+    if (icuName == "UTF-8") canonical = "utf8";
+    else if (icuName == "UTF-16LE") canonical = "utf16";
+    else if (icuName == "UTF-16BE") canonical = "utf16be";
+    else if (icuName == "UTF-32LE") canonical = "utf32";
+    else if (icuName == "UTF-32BE") canonical = "utf32be";
+    else return std::nullopt;
+
+    // Detection is heuristic; reject truncated or malformed Unicode even when
+    // ICU gives it a high confidence. Preflight conversion validates all bytes.
+    std::unique_ptr<UConverter, decltype(&ucnv_close)> converter(
+        ucnv_open(name, &status), &ucnv_close);
+    if (U_FAILURE(status) || !converter) return std::nullopt;
+    ucnv_setToUCallBack(converter.get(), UCNV_TO_U_CALLBACK_STOP, nullptr,
+                      nullptr, nullptr, &status);
+    if (U_FAILURE(status)) return std::nullopt;
+    ucnv_toUChars(converter.get(), nullptr, 0, bytes.data(),
+                 static_cast<int32_t>(bytes.size()), &status);
+    if (U_FAILURE(status) && status != U_BUFFER_OVERFLOW_ERROR)
+        return std::nullopt;
+
+    return DetectionResult{canonical, confidence / 100.0, 0};
+}
 
 std::string toLowerAscii(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(),
@@ -81,6 +131,9 @@ std::vector<DetectionResult>
 Detector::detectCodepage(const std::string& iso, std::string_view bytes) {
     std::vector<DetectionResult> results;
 
+    if (bytes.empty()) return results;
+    if (auto unicode = detectUnicode(bytes)) return {*unicode};
+
     const Language* lang = languages.getByIsoCode(iso);
     if (!lang) return results;
 
@@ -114,9 +167,8 @@ Detector::detectCodepage(const std::string& iso, std::string_view bytes) {
 
     std::sort(results.begin(), results.end(),
               [](const DetectionResult& a, const DetectionResult& b) {
-                  // primary: score desc (close scores are clustered)
-                  constexpr double EPS = 0.02;
-                  if (std::abs(a.score - b.score) > EPS)
+                  // Exact ordering keeps the comparator transitive.
+                  if (a.score != b.score)
                       return a.score > b.score;
                   // tie-break: rank asc (prefer Windows/ISO over exotics)
                   if (a.rank != b.rank) return a.rank < b.rank;
