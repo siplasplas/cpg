@@ -38,8 +38,12 @@ Detector detector(codepages, languages, &model);
 auto candidates = detector.detectCodepage(bytes); // no language question
 if (!candidates.empty()) {
     const auto& best = candidates.front();
-    auto text = codepages.getByName(best.codepage)->toU32(bytes);
-    // Display text; best.language contains the inferred language key.
+    Converter converter(codepages);
+    auto decoded = converter.toUtf8(best.codepage, bytes);
+    if (decoded.success) {
+        // Edit decoded.output as UTF-8; remember best.codepage for saving.
+        // best.language contains the inferred language key.
+    }
 }
 ```
 
@@ -54,6 +58,57 @@ short, mixed-language or unsupported-language text can be misidentified.
 
 The `convcp` demo still requires explicit encodings; `cpg_corpus detect` provides
 automatic identification and optional UTF-8 output.
+
+## UTF-8 editing and saving in the original codepage
+
+Include `<cpg/Converter.h>`. `Converter` uses the registered codepage names and
+tables, including custom Polish encodings. It supports every currently registered
+encoding: single-byte codepages and UTF-8/16/32. `CpManager` must outlive it.
+
+```cpp
+Converter converter(codepages);
+std::string editorText;
+auto opened = converter.toUtf8("cp1250", originalBytes);
+if (opened.success) {
+    editorText = opened.output;
+    // After editing, attempt an atomic conversion back to the original encoding:
+    auto saved = converter.fromUtf8("cp1250", editorText); // Reject by default
+    if (saved.success) {
+        // Write saved.output using binary file I/O.
+    } else if (saved.error == ConversionError::Unrepresentable) {
+        // Show a UTF-8 conversion choice. saved.issues lists each offending
+        // Unicode scalar and its byteOffset in editorText; output is empty.
+    }
+}
+
+// Explicit lossy-save mode: one '?' for every unrepresentable Unicode scalar.
+auto lossy = converter.fromUtf8("cp1250", editorText, UnmappablePolicy::Replace);
+// Only write if lossy.success; issues remain available to report replacements.
+```
+
+The editor keeps the detected original encoding alongside its UTF-8 buffer.
+Use default `Reject` for normal saves. An editor can also test each proposed
+insertion or paste with `fromUtf8(originalEncoding, insertion)` before accepting
+it, or allow all Unicode while checking on save. On an unrepresentable character,
+offer changing the document's encoding to `utf8`; update the remembered encoding
+only after the user chooses that option. Replacement with `?` permanently loses
+those characters in the saved file and therefore needs an explicit editor mode.
+
+Both directions reject malformed input, even in `Replace` mode. Undefined legacy
+bytes are reported instead of being dropped. A failed conversion has
+`success == false`, an error category, and no partial output. Successful replacement
+has `success == true`, `error == None`, and nonempty `issues`. Offsets count input
+bytes, not displayed characters; invalid input issues have `codepoint == 0`.
+Unicode decoding reports the first invalid sequence; legacy decoding reports all
+undefined bytes. Empty valid input succeeds with empty output.
+
+BOMs are preserved as U+FEFF through conversion; none are inserted automatically.
+If the editor removes a leading BOM from its internal buffer, it must remember
+that separately and restore it on save. Conversion preserves characters; duplicate
+byte mappings can be canonicalized on re-encoding. Detection remains statistical,
+so conversion success does not prove that a selected legacy encoding is correct.
+The older `Codepage::toU32/fromU32` API retains its existing lossy behavior; use
+`Converter` when an editor needs explicit validation and replacement policy.
 
 ## Corpus training and evaluation
 

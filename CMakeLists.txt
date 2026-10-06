@@ -15,6 +15,7 @@ add_library(cpg STATIC
         src/BigTableCodepage.cpp
         src/UtfCodepage.cpp
         src/CpManager.cpp
+        src/Converter.cpp
         src/PolishDosCodepages.cpp
         src/Language.cpp
         src/Detector.cpp
@@ -46,6 +47,7 @@ if(CPG_BUILD_TESTS)
     add_executable(cpg_tests
             test/UtfCodepageTest.cpp
             test/CpManagerTest.cpp
+            test/ConverterTest.cpp
             test/LanguageTest.cpp
             test/DetectorTest.cpp
             test/NgramModelTest.cpp)
