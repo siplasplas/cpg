@@ -6,28 +6,32 @@
 #include <vector>
 #include <cpg/CpManager.h>
 #include <cpg/Language.h>
+#include <cpg/NgramModel.h>
 
 struct DetectionResult {
     std::string codepage;
-    double score;    // 0..1: ICU confidence for Unicode; alphabet coverage otherwise
+    double score;    // 0..1: ICU confidence, model likelihood, or alphabet coverage
     int rank;        // lower = more "normal" (Windows/ISO/UTF)
 };
 
 class Detector {
     CpManager& cpManager;
     Languages& languages;
+    const NgramModel* model;
 public:
-    Detector(CpManager& cpm, Languages& langs);
+    Detector(CpManager& cpm, Languages& langs, const NgramModel* model = nullptr);
 
     // First accept ICU's best match if it is valid UTF-8/16/32 with confidence
     // >= 80 (language-independent). Otherwise rank the language's codepages
-    // by alphabet coverage. Empty input returns no candidates.
+    // by model likelihood when available, otherwise alphabet coverage.
+    // The optional model must outlive the detector. Empty input returns no candidates.
     // Fallback results are sorted by score desc; ties broken by rank asc.
     std::vector<DetectionResult> detectCodepage(const std::string& iso,
                                                 std::string_view bytes);
 
     // Exposed for testing / external use
     static int codepageRank(const std::string& name);
+    static std::string canonicalCodepageName(const std::string& name);
 };
 
 #endif //CPG_DETECTOR_H

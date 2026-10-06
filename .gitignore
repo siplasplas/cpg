@@ -1,6 +1,7 @@
 www.unicode.org*
 .idea/
 *build*/
+corpus-results/
 
 # Prerequisites
 *.d

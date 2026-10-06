@@ -16,7 +16,8 @@ add_library(cpg STATIC
         src/CpManager.cpp
         src/PolishDosCodepages.cpp
         src/Language.cpp
-        src/Detector.cpp)
+        src/Detector.cpp
+        src/NgramModel.cpp)
 
 target_include_directories(cpg PUBLIC include)
 target_link_libraries(cpg PUBLIC ICU::uc ICU::i18n)
@@ -31,6 +32,11 @@ target_link_libraries(convcp cpg)
 add_executable(tableCreator tableCreator.cpp)
 target_link_libraries(tableCreator cpg)
 
+add_executable(cpg_corpus tools/corpus.cpp)
+target_link_libraries(cpg_corpus cpg)
+target_compile_definitions(cpg_corpus PRIVATE
+        CPG_LANGUAGES_TXT="${CMAKE_CURRENT_SOURCE_DIR}/languages.txt")
+
 # Testy (GoogleTest)
 option(CPG_BUILD_TESTS "Build unit tests" ON)
 if(CPG_BUILD_TESTS)
@@ -40,10 +46,17 @@ if(CPG_BUILD_TESTS)
             test/UtfCodepageTest.cpp
             test/CpManagerTest.cpp
             test/LanguageTest.cpp
-            test/DetectorTest.cpp)
+            test/DetectorTest.cpp
+            test/NgramModelTest.cpp)
     target_link_libraries(cpg_tests cpg GTest::gtest GTest::gtest_main)
     target_compile_definitions(cpg_tests PRIVATE
             CPG_LANGUAGES_TXT="${CMAKE_CURRENT_SOURCE_DIR}/languages.txt")
     include(GoogleTest)
     gtest_discover_tests(cpg_tests)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME CorpusTool.Workflow
+                COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test/CorpusToolTest.py
+                        $<TARGET_FILE:cpg_corpus>)
+    endif()
 endif()

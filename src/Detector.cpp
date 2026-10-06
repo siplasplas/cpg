@@ -109,8 +109,12 @@ std::unordered_set<char32_t> alphabetSet(const Language& lang) {
 
 } // namespace
 
-Detector::Detector(CpManager& cpm, Languages& langs)
-    : cpManager(cpm), languages(langs) {}
+Detector::Detector(CpManager& cpm, Languages& langs, const NgramModel* model)
+    : cpManager(cpm), languages(langs), model(model) {}
+
+std::string Detector::canonicalCodepageName(const std::string& name) {
+    return normalizeName(name);
+}
 
 int Detector::codepageRank(const std::string& name) {
     std::string n = toLowerAscii(name);
@@ -146,6 +150,14 @@ Detector::detectCodepage(const std::string& iso, std::string_view bytes) {
         if (!cp) continue;
 
         std::u32string u32 = cp->toU32(bytes);
+
+        if (model && model->contains(iso)) {
+            // Single-byte candidates must decode every input byte. Undefined
+            // bytes otherwise disappear in TableCodepage and inflate scores.
+            double score = u32.size() == bytes.size() ? model->score(iso, u32) : 0.0;
+            results.push_back({canonical, score, codepageRank(canonical)});
+            continue;
+        }
 
         int64_t hits = 0, misses = 0, noise = 0;
         for (char32_t c : u32) {
