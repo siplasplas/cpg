@@ -6,6 +6,7 @@ add_definitions("-Werror=return-type -Werror=unused-result")
 set(CMAKE_CXX_STANDARD 17)
 
 find_package(ICU REQUIRED COMPONENTS uc i18n)
+find_package(ZLIB REQUIRED)
 
 # Biblioteka cpg
 add_library(cpg STATIC
@@ -20,7 +21,7 @@ add_library(cpg STATIC
         src/NgramModel.cpp)
 
 target_include_directories(cpg PUBLIC include)
-target_link_libraries(cpg PUBLIC ICU::uc ICU::i18n)
+target_link_libraries(cpg PUBLIC ICU::uc ICU::i18n ZLIB::ZLIB)
 
 # Demo konwerter
 add_executable(convcp
@@ -50,7 +51,8 @@ if(CPG_BUILD_TESTS)
             test/NgramModelTest.cpp)
     target_link_libraries(cpg_tests cpg GTest::gtest GTest::gtest_main)
     target_compile_definitions(cpg_tests PRIVATE
-            CPG_LANGUAGES_TXT="${CMAKE_CURRENT_SOURCE_DIR}/languages.txt")
+            CPG_LANGUAGES_TXT="${CMAKE_CURRENT_SOURCE_DIR}/languages.txt"
+            CPG_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data/models")
     include(GoogleTest)
     gtest_discover_tests(cpg_tests)
     find_package(Python3 QUIET COMPONENTS Interpreter)

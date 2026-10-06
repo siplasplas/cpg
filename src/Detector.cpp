@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_set>
+#include <unordered_map>
 #include <unicode/ucnv.h>
 #include <unicode/ucnv_err.h>
 #include <unicode/ucsdet.h>
@@ -107,6 +108,31 @@ std::unordered_set<char32_t> alphabetSet(const Language& lang) {
     return s;
 }
 
+void sortResults(std::vector<DetectionResult>& results) {
+    std::sort(results.begin(), results.end(), [](const auto& a, const auto& b) {
+        if (a.score != b.score) return a.score > b.score;
+        if (a.languageScore != b.languageScore) return a.languageScore > b.languageScore;
+        if (a.rank != b.rank) return a.rank < b.rank;
+        if (a.codepage != b.codepage) return a.codepage < b.codepage;
+        return a.language < b.language;
+    });
+}
+
+constexpr size_t samplePart = 2048;
+
+template<class Char>
+std::basic_string<Char> modelSample(std::basic_string_view<Char> input) {
+    // Bound editor latency: sample beginning, middle and end for large files.
+    constexpr size_t part = samplePart;
+    if (input.size() <= part * 3) return std::basic_string<Char>(input);
+    std::basic_string<Char> sample(input.substr(0, part));
+    sample.push_back(static_cast<Char>(' '));
+    sample.append(input.substr((input.size() - part) / 2, part));
+    sample.push_back(static_cast<Char>(' '));
+    sample.append(input.substr(input.size() - part));
+    return sample;
+}
+
 } // namespace
 
 Detector::Detector(CpManager& cpm, Languages& langs, const NgramModel* model)
@@ -133,10 +159,17 @@ int Detector::codepageRank(const std::string& name) {
 
 std::vector<DetectionResult>
 Detector::detectCodepage(const std::string& iso, std::string_view bytes) {
+    if (iso.empty() || iso == "auto") return detectCodepage(bytes);
+    if (iso == "cs") return detectCodepage("cz", bytes);
     std::vector<DetectionResult> results;
 
     if (bytes.empty()) return results;
-    if (auto unicode = detectUnicode(bytes)) return {*unicode};
+    if (auto unicode = detectUnicode(bytes)) {
+        if (languages.getByIsoCode(iso)) unicode->language = iso;
+        if (model && model->contains(iso))
+            unicode->languageScore = model->score(iso, cpManager.getByName(unicode->codepage)->toU32(bytes));
+        return {*unicode};
+    }
 
     const Language* lang = languages.getByIsoCode(iso);
     if (!lang) return results;
@@ -155,7 +188,7 @@ Detector::detectCodepage(const std::string& iso, std::string_view bytes) {
             // Single-byte candidates must decode every input byte. Undefined
             // bytes otherwise disappear in TableCodepage and inflate scores.
             double score = u32.size() == bytes.size() ? model->score(iso, u32) : 0.0;
-            results.push_back({canonical, score, codepageRank(canonical)});
+            results.push_back({canonical, score, codepageRank(canonical), iso, score});
             continue;
         }
 
@@ -174,17 +207,60 @@ Detector::detectCodepage(const std::string& iso, std::string_view bytes) {
             score *= (1.0 - noiseRatio);
         }
 
-        results.push_back({canonical, score, codepageRank(canonical)});
+        results.push_back({canonical, score, codepageRank(canonical), iso});
     }
 
-    std::sort(results.begin(), results.end(),
-              [](const DetectionResult& a, const DetectionResult& b) {
-                  // Exact ordering keeps the comparator transitive.
-                  if (a.score != b.score)
-                      return a.score > b.score;
-                  // tie-break: rank asc (prefer Windows/ISO over exotics)
-                  if (a.rank != b.rank) return a.rank < b.rank;
-                  return a.codepage < b.codepage;
-              });
+    sortResults(results);
+    return results;
+}
+
+std::vector<DetectionResult> Detector::detectCodepage(std::string_view bytes) {
+    if (bytes.empty()) return {};
+    std::vector<DetectionResult> results;
+    if (auto unicode = detectUnicode(bytes)) {
+        if (!model) return {*unicode};
+        auto text = cpManager.getByName(unicode->codepage)->toU32(bytes);
+        auto sample = modelSample<char32_t>(text);
+        for (const auto& iso : model->languageCodes()) {
+            if (!languages.getByIsoCode(iso)) continue;
+            auto result = *unicode;
+            result.language = iso;
+            result.languageScore = model->score(iso, sample);
+            results.push_back(std::move(result));
+        }
+        sortResults(results);
+        if (results.empty() || results.front().languageScore == 0) return {*unicode};
+        return results;
+    }
+    if (!model) throw std::runtime_error("Automatic legacy detection requires language models");
+    const auto sample = modelSample<char>(bytes);
+    std::unordered_map<std::string, std::u32string> decoded;
+    for (const auto& iso : model->languageCodes()) {
+        if (!languages.getByIsoCode(iso)) continue;
+        std::unordered_set<std::string> seen;
+        for (const auto& raw : languages.getCharsetsForLanguage(iso)) {
+            auto name = normalizeName(raw);
+            if (!seen.insert(name).second) continue;
+            auto* cp = cpManager.getByName(name);
+            if (!cp) continue;
+            auto it = decoded.find(name);
+            if (it == decoded.end()) it = decoded.emplace(name, cp->toU32(sample)).first;
+            // Undefined-byte candidates cannot provide lossless editor text.
+            if (it->second.size() != sample.size()) continue;
+            auto score = model->score(iso, it->second);
+            results.push_back({name, score, codepageRank(name), iso, score});
+        }
+    }
+    sortResults(results);
+    // Confirm the selected single-byte encoding preserves every byte of the
+    // complete file, including positions outside the statistical sample.
+    if (bytes.size() > samplePart * 3) {
+        while (!results.empty()) {
+            const auto name = results.front().codepage;
+            if (cpManager.getByName(name)->toU32(bytes).size() == bytes.size()) break;
+            results.erase(std::remove_if(results.begin(), results.end(),
+                [&](const auto& result) { return result.codepage == name; }), results.end());
+        }
+    }
     return results;
 }

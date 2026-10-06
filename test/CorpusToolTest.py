@@ -49,6 +49,26 @@ with tempfile.TemporaryDirectory(prefix="cpg-corpus-test-") as temporary:
         assert int(row["ambiguous"]) + int(row["identifiable"]) == int(row["accepted"])
         assert int(row["model_identifiable"]) <= int(row["identifiable"])
     assert pathlib.Path(str(report) + ".confusion.csv").is_file()
+    compressed = root / "compact.ngram"
+    run("compact", "--model", model, "--output", compressed)
+    assert compressed.stat().st_size < model.stat().st_size
+    split = root / "languages"
+    run("split", "--model", model, "--output-dir", split)
+    assert {p.name for p in split.glob("*.ngram")} == {"pl.ngram", "cz.ngram"}
+    sample.write_bytes(text.encode("cp1250"))
+    decoded = root / "decoded.txt"
+    result = run("detect", "--model", split, "--input", sample, "--output", decoded)
+    assert result.stdout.splitlines()[1].startswith("cp1250,pl,"), result.stdout
+    assert decoded.read_bytes() == text.encode("utf-8")
+    run("benchmark", "--corpus", corpus, "--model", split, "--output", report,
+        "--samples", "3", "--mode", "auto")
+    run("detect", "--model", compressed, "--input", sample, "--output", sample, success=False)
+    pruned = root / "pl-pruned.ngram"
+    run("compact", "--model", model, "--output", pruned, "--keep-percent", "10", "--lang", "pl")
+    trained_small = root / "pl-trained.ngram"
+    run("train", "--corpus", corpus, "--output", trained_small, "--keep-percent", "10",
+        "--lang", "pl", "--format", "binary")
+    assert pruned.read_bytes() == trained_small.read_bytes()
     with (corpus / "pl.txt").open("a", encoding="utf-8") as stream:
         stream.write("Zmieniony korpus.\n")
     result = run("benchmark", "--corpus", corpus, "--model", model,

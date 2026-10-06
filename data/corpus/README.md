@@ -2,8 +2,9 @@
 
 `1MB.ngram.corpus` is the small, versioned provenance manifest for the reference
 model. It contains 32 source-file sizes and FNV-1a 64-bit hashes, not character
-statistics. Detection requires the generated `corpus-results/1MB.ngram` model.
-Models, benchmark CSVs and source texts are not included in Git.
+statistics. Detection uses the versioned compressed models in `../models/`,
+generated from `corpus-results/1MB.ngram`. Full text models, benchmark CSVs and
+source texts are not included in Git.
 
 One manifest is retained: benchmarks on the same held-out samples produced
 98.446%, 98.490%, 98.433% and 98.484% accuracy for the 1/5/10/20 MB corpora,

@@ -12,6 +12,8 @@ struct DetectionResult {
     std::string codepage;
     double score;    // 0..1: ICU confidence, model likelihood, or alphabet coverage
     int rank;        // lower = more "normal" (Windows/ISO/UTF)
+    std::string language; // languages.txt key (Czech: cz); empty without language evidence
+    double languageScore = 0; // model likelihood, not calibrated confidence
 };
 
 class Detector {
@@ -28,6 +30,9 @@ public:
     // Fallback results are sorted by score desc; ties broken by rank asc.
     std::vector<DetectionResult> detectCodepage(const std::string& iso,
                                                 std::string_view bytes);
+    // Automatic language + encoding detection using all loaded profiles.
+    // Unicode still goes through ICU first. Legacy auto-detection needs a model.
+    std::vector<DetectionResult> detectCodepage(std::string_view bytes);
 
     // Exposed for testing / external use
     static int codepageRank(const std::string& name);
