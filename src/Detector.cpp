@@ -133,6 +133,37 @@ std::basic_string<Char> modelSample(std::basic_string_view<Char> input) {
     return sample;
 }
 
+// Sample of legacy (non-Unicode) bytes for large files. ASCII decodes the
+// same in every candidate code page, so only text around non-ASCII bytes
+// tells them apart; in source code those may be a few comments that the
+// beginning/middle/end sample would miss. The sample is made of the line
+// pieces around non-ASCII bytes (up to the usual size); input without any
+// falls back to modelSample().
+std::string legacySample(std::string_view input) {
+    const size_t budget = samplePart * 3;
+    if (input.size() <= budget) return std::string(input);
+    const auto high = [&](size_t i) { return static_cast<unsigned char>(input[i]) >= 0x80; };
+    const auto space = [&](size_t i) { return input[i] == ' ' || input[i] == '\t' || input[i] == '\r'; };
+    std::string sample;
+    size_t covered = 0; // end of the previous piece
+    for (size_t i = 0; i < input.size() && sample.size() < budget; ++i) {
+        if (!high(i)) continue;
+        // Back to the line start, at most 64 bytes and not into the previous
+        // piece; these bytes are ASCII.
+        size_t from = i;
+        while (from > covered && input[from - 1] != '\n' && i - from < 64) --from;
+        // Forward to the line end; past 64 bytes stop at whitespace, which
+        // is never inside a multi-byte (e.g. Shift-JIS) character.
+        size_t to = i;
+        while (to < input.size() && input[to] != '\n' && (to - i < 64 || !space(to))) ++to;
+        sample.append(input.substr(from, to - from));
+        sample.push_back(' ');
+        covered = to;
+        i = to;
+    }
+    return sample.empty() ? modelSample<char>(input) : sample;
+}
+
 } // namespace
 
 Detector::Detector(CpManager& cpm, Languages& langs, const NgramModel* model)
@@ -166,8 +197,10 @@ Detector::detectCodepage(const std::string& iso, std::string_view bytes) {
     if (bytes.empty()) return results;
     if (auto unicode = detectUnicode(bytes)) {
         if (languages.getByIsoCode(iso)) unicode->language = iso;
-        if (model && model->contains(iso))
-            unicode->languageScore = model->score(iso, cpManager.getByName(unicode->codepage)->toU32(bytes));
+        if (model && model->contains(iso)) {
+            const auto text = cpManager.getByName(unicode->codepage)->toU32(bytes);
+            unicode->languageScore = model->score(iso, modelSample<char32_t>(text));
+        }
         return {*unicode};
     }
 
@@ -176,21 +209,25 @@ Detector::detectCodepage(const std::string& iso, std::string_view bytes) {
 
     auto alpha = alphabetSet(*lang);
     auto charsets = languages.getCharsetsForLanguage(iso);
+    // With a model, score the same bounded sample as automatic detection.
+    const bool modelled = model && model->contains(iso);
+    const auto sample = modelled ? legacySample(bytes) : std::string();
 
     for (const auto& charsetName : charsets) {
         std::string canonical = normalizeName(charsetName);
         Codepage* cp = cpManager.getByName(canonical);
         if (!cp) continue;
 
-        std::u32string u32 = cp->toU32(bytes);
-
-        if (model && model->contains(iso)) {
+        if (modelled) {
             // Single-byte candidates must decode every input byte. Undefined
             // bytes otherwise disappear in TableCodepage and inflate scores.
-            double score = u32.size() == bytes.size() ? model->score(iso, u32) : 0.0;
+            const std::u32string u32 = cp->toU32(sample);
+            double score = u32.size() == sample.size() ? model->score(iso, u32) : 0.0;
             results.push_back({canonical, score, codepageRank(canonical), iso, score});
             continue;
         }
+
+        std::u32string u32 = cp->toU32(bytes);
 
         int64_t hits = 0, misses = 0, noise = 0;
         for (char32_t c : u32) {
@@ -211,6 +248,16 @@ Detector::detectCodepage(const std::string& iso, std::string_view bytes) {
     }
 
     sortResults(results);
+    // A sampled winner must also decode every byte of the complete file;
+    // otherwise it scores 0 and the next candidate is checked.
+    if (modelled && bytes.size() > samplePart * 3) {
+        for (auto& result : results) {
+            if (result.score == 0) break;
+            if (cpManager.getByName(result.codepage)->toU32(bytes).size() == bytes.size()) break;
+            result.score = result.languageScore = 0;
+        }
+        sortResults(results);
+    }
     return results;
 }
 
@@ -233,7 +280,7 @@ std::vector<DetectionResult> Detector::detectCodepage(std::string_view bytes) {
         return results;
     }
     if (!model) throw std::runtime_error("Automatic legacy detection requires language models");
-    const auto sample = modelSample<char>(bytes);
+    const auto sample = legacySample(bytes);
     std::unordered_map<std::string, std::u32string> decoded;
     for (const auto& iso : model->languageCodes()) {
         if (!languages.getByIsoCode(iso)) continue;

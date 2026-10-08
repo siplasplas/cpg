@@ -50,9 +50,13 @@ if (!candidates.empty()) {
 Load `data/models/pl.ngram` alone when Polish is known. Unicode detection uses
 ICU first, then models rank the decoded text's language. Automatic legacy
 detection compares language/codepage pairs. For files larger than 6144 bytes,
-legacy statistics sample 2048 bytes at the beginning, middle and end; the top
-candidate is then checked against the whole file for undefined bytes. Unicode
-language scoring similarly samples decoded codepoints. Small files use all
+legacy statistics use a sample of up to 6144 bytes made of the line pieces
+around non-ASCII bytes, since ASCII decodes the same in every candidate (in
+source code the national characters may sit only in a few comments); input
+without non-ASCII bytes samples 2048 bytes at the beginning, middle and end.
+The same sample is used with a known language. The top candidate is then
+checked against the whole file for undefined bytes. Unicode language scoring
+samples decoded codepoints at the beginning, middle and end. Small files use all
 their text. Language scores are likelihood rankings, not calibrated confidence;
 short, mixed-language or unsupported-language text can be misidentified.
 

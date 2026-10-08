@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.26)
-project(cpg VERSION 1.1.0)
+project(cpg VERSION 1.1.1)
 
 add_definitions("-Werror=return-type -Werror=unused-result")
 
