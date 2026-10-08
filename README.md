@@ -110,6 +110,25 @@ so conversion success does not prove that a selected legacy encoding is correct.
 The older `Codepage::toU32/fromU32` API retains its existing lossy behavior; use
 `Converter` when an editor needs explicit validation and replacement policy.
 
+## Using cpg from CMake
+
+`cmake --install` installs the static library, the headers, and the detection
+data (`share/cpg/languages.txt`, `share/cpg/models/*.ngram`) with a CMake
+package. ICU (uc, i18n) and zlib are required by consumers as well.
+
+```cmake
+find_package(cpg 1.1 REQUIRED)
+target_link_libraries(app PRIVATE cpg::cpg)
+# Paths of the detection data, e.g. for a compile definition:
+#   CPG_LANGUAGES_FILE  -> .../share/cpg/languages.txt
+#   CPG_MODELS_DIR      -> .../share/cpg/models
+```
+
+The same target and variables are available after `add_subdirectory` or
+`FetchContent_MakeAvailable`, pointing into the source tree. As a subproject cpg
+builds only the library: `CPG_BUILD_TOOLS`, `CPG_BUILD_TESTS` and `CPG_INSTALL`
+default to ON only when cpg is the top-level project.
+
 ## Corpus training and evaluation
 
 Build the `cpg_corpus` executable:
