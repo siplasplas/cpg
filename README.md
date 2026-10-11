@@ -17,9 +17,33 @@ Detection through `Detector::detectCodepage(language, bytes)` runs in two stages
 Unicode results use the registered names `utf8`, `utf16` (LE), `utf16be`,
 `utf32` (LE), and `utf32be`. Their score is ICU confidence divided by 100;
 legacy scores measure geometric mean character likelihood (with a model) or
-alphabet coverage (without one), not detection confidence. Empty input returns
-no results. ASCII and texts with identical bytes in multiple codepages remain
-ambiguous; the fallback ordering is a preference, not proof of an encoding.
+alphabet coverage (without one). Empty input returns no results.
+
+With a model every result also has a `confidence`: the probability that its
+decoding gives the right text. Candidates decoding the input identically (for
+example cp1250 and iso-8859-2 when no differing byte occurs, or any codepage
+for pure ASCII) share one `decoding` and one confidence. High confidence needs
+enough distinguishing text and a clear lead over the other decodings;
+`languageConfidence` is the analogous probability of the language. Valid UTF-8
+with only a few multi-byte sequences (ICU confidence 80) competes with the
+legacy decodings, since e.g. Polish "Ół" in cp1250 is valid UTF-8 too.
+`Detector::plausible(results, 0.95)` returns the confident winner alone, or
+otherwise the smallest set of alternatives (one per decoding) whose
+confidence adds up to 0.95, for an editor to ask about rather than convert.
+
+```cpp
+auto alternatives = Detector::plausible(detector.detectCodepage("pl", bytes));
+if (alternatives.size() == 1 && alternatives.front().confidence >= 0.95) {
+    // convert automatically
+} else {
+    // show the alternatives
+}
+```
+
+The log likelihood ratio is divided by an evidence divisor (default 8,
+`setEvidenceDivisor`) chosen on held-out corpus samples: the raw ratio is
+overconfident because neighbouring characters are not independent and rare
+characters (foreign names, symbols) mislead the model.
 
 ```cpp
 CpManager codepages;
@@ -47,15 +71,20 @@ if (!candidates.empty()) {
 }
 ```
 
+When the file is known to be in one of a few languages, restrict the search:
+`detector.detectCodepageAmong({"pl", "cz"}, bytes)` (multiple languages need
+their models; one language behaves like `detectCodepage("pl", bytes)`).
+
 Load `data/models/pl.ngram` alone when Polish is known. Unicode detection uses
 ICU first, then models rank the decoded text's language. Automatic legacy
-detection compares language/codepage pairs. For files larger than 6144 bytes,
-legacy statistics use a sample of up to 6144 bytes made of the line pieces
-around non-ASCII bytes, since ASCII decodes the same in every candidate (in
-source code the national characters may sit only in a few comments); input
-without non-ASCII bytes samples 2048 bytes at the beginning, middle and end.
-The same sample is used with a known language. The top candidate is then
-checked against the whole file for undefined bytes. Unicode language scoring
+detection compares language/codepage pairs. Legacy statistics use a sample of
+up to 6144 bytes made of the words containing non-ASCII bytes, with one word on
+each side, since ASCII decodes the same in every candidate (in source code the
+national characters may sit only in a few comments, and the surrounding code
+would be misleading language evidence); input without non-ASCII bytes samples
+2048 bytes at the beginning, middle and end. The same sample is used with a
+known language. Likely candidates are then checked against the whole file for
+undefined bytes; failures are removed and the confidence recomputed. Unicode language scoring
 samples decoded codepoints at the beginning, middle and end. Small files use all
 their text. Language scores are likelihood rankings, not calibrated confidence;
 short, mixed-language or unsupported-language text can be misidentified.
@@ -159,6 +188,11 @@ Ready-to-use automatic detection and conversion, without supplying a language:
 build/cpg_corpus detect --model data/models --input document.txt --output decoded-utf8.txt
 ```
 
+`detect` prints the candidates with `confidence` and `language_confidence`
+columns and reports `confident: …` or `uncertain: …` with the alternatives on
+stderr. With `--output` it refuses to convert (exit code 2) when the winner's
+confidence is below `--min-confidence` (default 0.95).
+
 ```sh
 build/cpg_corpus train \
   --corpus /home/andrzej/dump/corpus/1MB \
@@ -174,7 +208,7 @@ build/cpg_corpus detect \
 ```
 
 Use `--lang pl` on `train` or `benchmark` to process a single language, or on
-`detect` to constrain the search. `detect` defaults to automatic language
+`detect` to constrain the search (`detect` also accepts a list: `--lang pl,cz`). `detect` defaults to automatic language
 identification; `--model` accepts a file or a directory. With a directory and a
 known language, only its individual file is loaded. `train`, `benchmark` and
 `detect` accept `--languages FILE` to override language metadata.
@@ -258,6 +292,10 @@ For each algorithm, divide its `*_identifiable` count by `identifiable` to
 measure accuracy on resolvable cases. The accompanying `.csv.confusion.csv`
 lists the model's expected/predicted encoding pairs. More corpus data does not
 guarantee improvement; examine individual languages and sample lengths.
+`.csv.calibration.csv` groups the model's winners by confidence: in a
+calibrated detector about a fraction `c` of the winners with confidence `c`
+give the right text. The tool prints how many winners reached 0.95 and how
+many of those were wrong. `--evidence-divisor X` tries another divisor.
 
 Applications can load the same model directly:
 

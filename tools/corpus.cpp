@@ -38,6 +38,27 @@ size_t positive(const Options& options, const std::string& key, size_t fallback)
     return static_cast<size_t>(n);
 }
 
+double decimal(const Options& options, const std::string& key, double fallback,
+               double low, double high) {
+    auto it = options.find(key);
+    if (it == options.end()) return fallback;
+    size_t used = 0;
+    double value = 0;
+    try { value = std::stod(it->second, &used); } catch (const std::exception&) {}
+    if (used == 0 || used != it->second.size() || !(value >= low && value <= high))
+        throw std::runtime_error("Invalid " + key);
+    return value;
+}
+
+double probability(const Options& options, const std::string& key, double fallback) {
+    return decimal(options, key, fallback, 0, 1);
+}
+
+// Detection worked, but no candidate was confident enough to convert.
+struct LowConfidence : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 std::string isoName(std::string iso) { return iso == "cs" ? "cz" : iso; }
 
 unsigned keepPercent(const Options& options) {
@@ -268,7 +289,14 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
               "baseline_identifiable,model_identifiable,model_language\n";
     std::map<std::tuple<std::string, std::string, std::string, size_t>, size_t> confusion;
     Detector baseline(manager, languages), trained(manager, languages, &model);
+    if (options.count("--evidence-divisor"))
+        trained.setEvidenceDivisor(decimal(options, "--evidence-divisor", 8, 0.01, 1000));
     Metrics total;
+    // Calibration: does a winner with confidence c give the right text in a
+    // fraction c of the samples?
+    const std::vector<double> calibrationBins{0, 0.5, 0.8, 0.9, 0.95, 0.99, 0.999, 1};
+    struct Cell { size_t count = 0, correct = 0; double confidence = 0; };
+    std::map<std::pair<size_t, size_t>, Cell> calibration;
     for (const auto& [iso, path] : files) {
         auto info = readCorpus(path, iso, nullptr, testFiles.empty());
         if (!model.contains(iso) || !source.count(iso) ||
@@ -325,6 +353,15 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
                     row.baselineText += oldCp && oldCp->toU32(encoded) == text;
                     row.modelText += newCp && newCp->toU32(encoded) == text;
                     ++confusion[{iso, name, newName, length}];
+                    if (!newResults.empty()) {
+                        double confidence = newResults.front().confidence;
+                        size_t bin = std::upper_bound(calibrationBins.begin(), calibrationBins.end(),
+                                                      confidence) - calibrationBins.begin() - 1;
+                        auto& cell = calibration[{length, bin}];
+                        ++cell.count;
+                        cell.correct += newCp && newCp->toU32(encoded) == text;
+                        cell.confidence += confidence;
+                    }
                 }
             }
         }
@@ -353,6 +390,22 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
                << ',' << std::get<3>(key) << ',' << n << '\n';
     matrix.close();
     if (!matrix) throw std::runtime_error("Failed writing confusion matrix");
+    std::ofstream calibrationReport(output.string() + ".calibration.csv");
+    calibrationReport << "bytes,confidence_from,samples,correct_text,mean_confidence\n";
+    std::map<size_t, Cell> confident; // winners at >= 0.95, as the detect tool accepts
+    for (const auto& [key, cell] : calibration) {
+        calibrationReport << key.first << ',' << calibrationBins[key.second] << ',' << cell.count << ','
+                          << cell.correct << ',' << cell.confidence / cell.count << '\n';
+        if (calibrationBins[key.second] >= 0.95) {
+            confident[key.first].count += cell.count;
+            confident[key.first].correct += cell.correct;
+        }
+    }
+    calibrationReport.close();
+    if (!calibrationReport) throw std::runtime_error("Failed writing calibration");
+    for (const auto& [length, cell] : confident)
+        std::cout << "bytes=" << length << " confident=" << cell.count
+                  << " confident_wrong=" << cell.count - cell.correct << '\n';
     std::cout << "accepted=" << total.accepted << " strict_skipped=" << total.skipped
               << " ambiguous=" << total.ambiguous << " identifiable=" << total.identifiable
               << " baseline_correct=" << total.baselineIdentifiable
@@ -362,25 +415,43 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
 void detect(const Options& options, Languages& languages, CpManager& manager) {
     NgramModel model;
     const fs::path modelPath(required(options, "--model"));
-    const auto iso = options.count("--lang") ? isoName(options.at("--lang")) : "auto";
-    if (fs::is_directory(modelPath) && iso != "auto") model.load(modelPath / (iso + ".ngram"));
+    // --lang pl or --lang pl,cz; auto (default) considers every model language.
+    std::vector<std::string> isos;
+    std::stringstream list(options.count("--lang") ? options.at("--lang") : "auto");
+    for (std::string iso; std::getline(list, iso, ',');)
+        if (iso != "auto") isos.push_back(isoName(iso));
+    if (fs::is_directory(modelPath) && isos.size() == 1) model.load(modelPath / (isos.front() + ".ngram"));
     else loadModel(model, modelPath);
-    if (iso != "auto" && !model.contains(iso)) throw std::runtime_error("Model has no language: " + iso);
+    for (const auto& iso : isos)
+        if (!model.contains(iso)) throw std::runtime_error("Model has no language: " + iso);
     std::ifstream in(required(options, "--input"), std::ios::binary);
     if (!in) throw std::runtime_error("Cannot read input");
     std::string bytes((std::istreambuf_iterator<char>(in)), {});
     if (in.bad()) throw std::runtime_error("Failed reading input");
+    const double minimum = probability(options, "--min-confidence", 0.95);
     Detector detector(manager, languages, &model);
-    auto results = detector.detectCodepage(iso, bytes);
-    std::cout << "codepage,language,score,rank,language_score\n";
+    auto results = detector.detectCodepageAmong(isos, bytes);
+    std::cout << "codepage,language,score,rank,language_score,confidence,language_confidence\n";
     for (size_t i = 0; i < results.size() && i < 10; ++i)
         std::cout << results[i].codepage << ',' << results[i].language << ',' << results[i].score
-                  << ',' << results[i].rank << ',' << results[i].languageScore << '\n';
+                  << ',' << results[i].rank << ',' << results[i].languageScore << ','
+                  << results[i].confidence << ',' << results[i].languageConfidence << '\n';
+    // A confident winner alone, otherwise the alternatives a person should see.
+    auto alternatives = Detector::plausible(results, minimum);
+    std::string summary;
+    for (const auto& result : alternatives)
+        summary += (summary.empty() ? "" : ", ") + result.codepage + '/' + result.language + ' ' +
+                   std::to_string(result.confidence);
+    std::cerr << (alternatives.size() == 1 && alternatives.front().confidence >= minimum
+                  ? "confident: " : "uncertain: ") << summary << '\n';
     if (options.count("--output")) {
         if (fs::weakly_canonical(options.at("--output")) == fs::weakly_canonical(options.at("--input")) ||
             (fs::exists(options.at("--output")) && fs::equivalent(options.at("--output"), options.at("--input"))))
             throw std::runtime_error("UTF-8 output must differ from input");
         if (!bytes.empty() && results.empty()) throw std::runtime_error("No usable encoding candidate");
+        if (!results.empty() && results.front().confidence < minimum)
+            throw LowConfidence("Confidence below " + std::to_string(minimum) +
+                                "; not converted. Candidates: " + summary);
         std::string utf8;
         if (!results.empty())
             utf8 = manager.getByName("utf8")->fromU32(manager.getByName(results.front().codepage)->toU32(bytes));
@@ -402,8 +473,12 @@ void help() {
         "  cpg_corpus benchmark --corpus DIR --model MODEL --output CSV [--samples 100] [--lang ISO]\n"
         "                       [--test-corpus DIR] (fixed test set for comparing corpus sizes)\n"
         "                       [--mode known|auto] (default: known)\n"
-        "  cpg_corpus detect --model MODEL_OR_DIR --input FILE [--lang ISO|auto] [--output UTF8_FILE]\n"
+        "                       [--evidence-divisor X] (default: 8; confidence calibration)\n"
+        "  cpg_corpus detect --model MODEL_OR_DIR --input FILE [--lang ISO[,ISO...]|auto]\n"
+        "                    [--output UTF8_FILE] [--min-confidence 0..1] (default: 0.95)\n"
         "Detection defaults to automatic language + codepage selection.\n"
+        "detect --output refuses (exit code 2) below the minimum confidence and lists\n"
+        "the alternatives; stderr says confident/uncertain with the candidates.\n"
         "train, benchmark and detect accept --languages FILE (default: project languages.txt).\n"
         "Input: UTF-8 <ISO>.txt files; cs is mapped to the project's cz.\n"
         "Split: line-content FNV-1a buckets 0..7 train, 8 reserved, 9 test.\n"
@@ -419,8 +494,8 @@ int main(int argc, char** argv) {
         if (command == "train") allowed.insert({"--corpus", "--output", "--keep-percent", "--format"});
         else if (command == "compact") allowed.insert({"--model", "--output", "--keep-percent", "--format"});
         else if (command == "split") allowed.insert({"--model", "--output-dir", "--keep-percent", "--format"});
-        else if (command == "benchmark") allowed.insert({"--corpus", "--model", "--output", "--samples", "--test-corpus", "--mode", "--manifest"});
-        else if (command == "detect") allowed.insert({"--model", "--input", "--output"});
+        else if (command == "benchmark") allowed.insert({"--corpus", "--model", "--output", "--samples", "--test-corpus", "--mode", "--manifest", "--evidence-divisor"});
+        else if (command == "detect") allowed.insert({"--model", "--input", "--output", "--min-confidence"});
         else throw std::runtime_error("Unknown command: " + command);
         Options options;
         for (int i = 2; i < argc; ++i) {
@@ -447,6 +522,9 @@ int main(int argc, char** argv) {
         else if (command == "benchmark") benchmark(options, languages, manager);
         else detect(options, languages, manager);
         return 0;
+    } catch (const LowConfidence& error) {
+        std::cerr << "Error: " << error.what() << '\n';
+        return 2;
     } catch (const std::exception& error) {
         std::cerr << "Error: " << error.what() << '\n';
         return 1;

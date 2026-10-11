@@ -14,25 +14,57 @@ struct DetectionResult {
     int rank;        // lower = more "normal" (Windows/ISO/UTF)
     std::string language; // languages.txt key (Czech: cz); empty without language evidence
     double languageScore = 0; // model likelihood, not calibrated confidence
+    // Probability that this candidate gives the right text: shared by all
+    // candidates that decode the input identically (e.g. cp1250 and
+    // iso-8859-2 without bytes that differ). 0 without a model.
+    double confidence = 0;
+    double languageConfidence = 0; // probability of `language`; 0 without a model
+    int decoding = -1; // results with the same value decode the input identically
 };
 
 class Detector {
     CpManager& cpManager;
     Languages& languages;
     const NgramModel* model;
+    double evidenceDivisor = 8;
+    // Language + encoding detection among model languages; empty = all.
+    std::vector<DetectionResult> detectAuto(const std::vector<std::string>& isos,
+                                            std::string_view bytes);
 public:
     Detector(CpManager& cpm, Languages& langs, const NgramModel* model = nullptr);
 
     // First accept ICU's best match if it is valid UTF-8/16/32 with confidence
-    // >= 80 (language-independent). Otherwise rank the language's codepages
-    // by model likelihood when available, otherwise alphabet coverage.
-    // The optional model must outlive the detector. Empty input returns no candidates.
-    // Fallback results are sorted by score desc; ties broken by rank asc.
+    // >= 80 (language-independent); UTF-8 with only a few multi-byte sequences
+    // competes with the legacy candidates instead. Otherwise rank the
+    // language's codepages by model likelihood when available, otherwise
+    // alphabet coverage. The optional model must outlive the detector.
+    // Empty input returns no candidates. Results are sorted by confidence,
+    // then score desc; ties broken by rank asc.
     std::vector<DetectionResult> detectCodepage(const std::string& iso,
                                                 std::string_view bytes);
     // Automatic language + encoding detection using all loaded profiles.
     // Unicode still goes through ICU first. Legacy auto-detection needs a model.
     std::vector<DetectionResult> detectCodepage(std::string_view bytes);
+    // Automatic detection restricted to the given languages (e.g. {"pl", "cz"}).
+    // Empty or {"auto"} = all languages; one language = detectCodepage(iso, bytes).
+    // Several languages need a model; languages without a profile are ignored.
+    // (A separate name: braced lists would be ambiguous with the string overload.)
+    std::vector<DetectionResult> detectCodepageAmong(const std::vector<std::string>& isos,
+                                                     std::string_view bytes);
+
+    // The alternatives worth considering: the smallest set of distinct
+    // decodings whose confidence adds up to `threshold`, one result for each
+    // (its most likely language and preferred codepage). A single result
+    // means a confident winner; several mean the caller should not decide
+    // alone. Expects sorted detectCodepage() results.
+    static std::vector<DetectionResult> plausible(const std::vector<DetectionResult>& results,
+                                                  double threshold = 0.95);
+
+    // Confidence treats the model's log likelihood ratio, divided by this
+    // value, as the evidence. Neighbouring characters are not independent and
+    // rare characters (foreign names, symbols) mislead the model, so the raw
+    // ratio is overconfident. Default 8, from held-out corpus samples.
+    void setEvidenceDivisor(double divisor) { evidenceDivisor = divisor; }
 
     // Exposed for testing / external use
     static int codepageRank(const std::string& name);

@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <unordered_set>
@@ -110,12 +112,43 @@ std::unordered_set<char32_t> alphabetSet(const Language& lang) {
 
 void sortResults(std::vector<DetectionResult>& results) {
     std::sort(results.begin(), results.end(), [](const auto& a, const auto& b) {
+        if (a.confidence != b.confidence) return a.confidence > b.confidence;
         if (a.score != b.score) return a.score > b.score;
         if (a.languageScore != b.languageScore) return a.languageScore > b.languageScore;
         if (a.rank != b.rank) return a.rank < b.rank;
         if (a.codepage != b.codepage) return a.codepage < b.codepage;
         return a.language < b.language;
     });
+}
+
+// Posterior probabilities with equal priors for every (decoding, language)
+// pair: P ~ score^(tokens / divisor). Candidates sharing a decoding and
+// language have the same score and count once. confidence = P(decoding),
+// languageConfidence = P(language) over all decodings.
+void assignConfidence(std::vector<DetectionResult>& results, size_t tokens, double divisor) {
+    std::map<std::pair<int, std::string>, double> joint;
+    double best = -std::numeric_limits<double>::infinity();
+    for (const auto& result : results) {
+        if (result.score <= 0) continue;
+        double logit = tokens * std::log(result.score) / divisor;
+        joint[{result.decoding, result.language}] = logit;
+        best = std::max(best, logit);
+    }
+    std::map<int, double> decodings;
+    std::map<std::string, double> languages;
+    double total = 0;
+    for (auto& [key, weight] : joint) {
+        weight = std::exp(weight - best);
+        decodings[key.first] += weight;
+        languages[key.second] += weight;
+        total += weight;
+    }
+    for (auto& result : results) {
+        result.confidence = result.languageConfidence = 0;
+        if (result.score <= 0 || total == 0) continue;
+        result.confidence = decodings[result.decoding] / total;
+        result.languageConfidence = languages[result.language] / total;
+    }
 }
 
 constexpr size_t samplePart = 2048;
@@ -133,29 +166,32 @@ std::basic_string<Char> modelSample(std::basic_string_view<Char> input) {
     return sample;
 }
 
-// Sample of legacy (non-Unicode) bytes for large files. ASCII decodes the
-// same in every candidate code page, so only text around non-ASCII bytes
-// tells them apart; in source code those may be a few comments that the
-// beginning/middle/end sample would miss. The sample is made of the line
-// pieces around non-ASCII bytes (up to the usual size); input without any
-// falls back to modelSample().
+// Sample of legacy (non-Unicode) bytes. ASCII decodes the same in every
+// candidate code page, so only text around non-ASCII bytes tells them apart.
+// In source code those may be a few comments that a beginning/middle/end
+// sample would miss, and the surrounding code would act as (misleading)
+// language evidence, e.g. Pascal looking more Danish than Polish. The sample
+// is made of the words with non-ASCII bytes and one word on each side, within
+// the line (up to the usual size); input without any falls back to
+// modelSample().
 std::string legacySample(std::string_view input) {
     const size_t budget = samplePart * 3;
-    if (input.size() <= budget) return std::string(input);
     const auto high = [&](size_t i) { return static_cast<unsigned char>(input[i]) >= 0x80; };
     const auto space = [&](size_t i) { return input[i] == ' ' || input[i] == '\t' || input[i] == '\r'; };
     std::string sample;
     size_t covered = 0; // end of the previous piece
     for (size_t i = 0; i < input.size() && sample.size() < budget; ++i) {
         if (!high(i)) continue;
-        // Back to the line start, at most 64 bytes and not into the previous
-        // piece; these bytes are ASCII.
+        // Back to the start of the previous word, at most 64 bytes and not
+        // into the previous piece or line; these bytes are ASCII.
         size_t from = i;
-        while (from > covered && input[from - 1] != '\n' && i - from < 64) --from;
-        // Forward to the line end; past 64 bytes stop at whitespace, which
-        // is never inside a multi-byte (e.g. Shift-JIS) character.
+        for (int starts = 0; from > covered && input[from - 1] != '\n' && i - from < 64; --from)
+            if (space(from - 1) && !space(from) && ++starts == 2) break;
+        // Forward to the end of the next word; past 64 bytes stop at
+        // whitespace, which is never inside a multi-byte (e.g. UTF-8) character.
         size_t to = i;
-        while (to < input.size() && input[to] != '\n' && (to - i < 64 || !space(to))) ++to;
+        for (int ends = 0; to < input.size() && input[to] != '\n' && (to - i < 64 || !space(to)); ++to)
+            if (space(to) && !space(to - 1) && ++ends == 2) break;
         sample.append(input.substr(from, to - from));
         sample.push_back(' ');
         covered = to;
@@ -195,12 +231,10 @@ Detector::detectCodepage(const std::string& iso, std::string_view bytes) {
     std::vector<DetectionResult> results;
 
     if (bytes.empty()) return results;
+    // With a model, a known language is automatic detection among one language.
+    if (model && model->contains(iso) && languages.getByIsoCode(iso)) return detectAuto({iso}, bytes);
     if (auto unicode = detectUnicode(bytes)) {
         if (languages.getByIsoCode(iso)) unicode->language = iso;
-        if (model && model->contains(iso)) {
-            const auto text = cpManager.getByName(unicode->codepage)->toU32(bytes);
-            unicode->languageScore = model->score(iso, modelSample<char32_t>(text));
-        }
         return {*unicode};
     }
 
@@ -209,23 +243,11 @@ Detector::detectCodepage(const std::string& iso, std::string_view bytes) {
 
     auto alpha = alphabetSet(*lang);
     auto charsets = languages.getCharsetsForLanguage(iso);
-    // With a model, score the same bounded sample as automatic detection.
-    const bool modelled = model && model->contains(iso);
-    const auto sample = modelled ? legacySample(bytes) : std::string();
 
     for (const auto& charsetName : charsets) {
         std::string canonical = normalizeName(charsetName);
         Codepage* cp = cpManager.getByName(canonical);
         if (!cp) continue;
-
-        if (modelled) {
-            // Single-byte candidates must decode every input byte. Undefined
-            // bytes otherwise disappear in TableCodepage and inflate scores.
-            const std::u32string u32 = cp->toU32(sample);
-            double score = u32.size() == sample.size() ? model->score(iso, u32) : 0.0;
-            results.push_back({canonical, score, codepageRank(canonical), iso, score});
-            continue;
-        }
 
         std::u32string u32 = cp->toU32(bytes);
 
@@ -244,70 +266,134 @@ Detector::detectCodepage(const std::string& iso, std::string_view bytes) {
             score *= (1.0 - noiseRatio);
         }
 
-        results.push_back({canonical, score, codepageRank(canonical), iso});
+        // Without a model no decodings are merged; plausible() lists them all.
+        DetectionResult result{canonical, score, codepageRank(canonical), iso};
+        result.decoding = static_cast<int>(results.size());
+        results.push_back(result);
     }
 
     sortResults(results);
-    // A sampled winner must also decode every byte of the complete file;
-    // otherwise it scores 0 and the next candidate is checked.
-    if (modelled && bytes.size() > samplePart * 3) {
-        for (auto& result : results) {
-            if (result.score == 0) break;
-            if (cpManager.getByName(result.codepage)->toU32(bytes).size() == bytes.size()) break;
-            result.score = result.languageScore = 0;
-        }
-        sortResults(results);
-    }
     return results;
 }
 
 std::vector<DetectionResult> Detector::detectCodepage(std::string_view bytes) {
+    return detectAuto({}, bytes);
+}
+
+std::vector<DetectionResult>
+Detector::detectCodepageAmong(const std::vector<std::string>& isos, std::string_view bytes) {
+    std::vector<std::string> wanted;
+    for (const auto& raw : isos) {
+        const std::string iso = raw == "cs" ? "cz" : raw;
+        if (iso.empty() || iso == "auto") return detectAuto({}, bytes);
+        if (std::find(wanted.begin(), wanted.end(), iso) == wanted.end()) wanted.push_back(iso);
+    }
+    if (wanted.size() <= 1) return detectCodepage(wanted.empty() ? "auto" : wanted.front(), bytes);
+    return detectAuto(wanted, bytes);
+}
+
+std::vector<DetectionResult>
+Detector::detectAuto(const std::vector<std::string>& isos, std::string_view bytes) {
     if (bytes.empty()) return {};
+    std::vector<std::string> codes = model ? model->languageCodes() : std::vector<std::string>();
+    if (!isos.empty())
+        codes.erase(std::remove_if(codes.begin(), codes.end(), [&](const auto& iso) {
+            return std::find(isos.begin(), isos.end(), iso) == isos.end();
+        }), codes.end());
     std::vector<DetectionResult> results;
-    if (auto unicode = detectUnicode(bytes)) {
+    auto unicode = detectUnicode(bytes);
+    // Valid UTF-8 with only a few multi-byte sequences (ICU confidence 80)
+    // may as well be legacy text, e.g. Polish "Ół" in cp1250 is valid UTF-8;
+    // then UTF-8 is one more candidate decoding for the language models.
+    const bool weakUtf8 = model && unicode && unicode->codepage == "utf8" && unicode->score < 1;
+    if (unicode && !weakUtf8) {
+        unicode->confidence = unicode->score;
         if (!model) return {*unicode};
         auto text = cpManager.getByName(unicode->codepage)->toU32(bytes);
         auto sample = modelSample<char32_t>(text);
-        for (const auto& iso : model->languageCodes()) {
+        for (const auto& iso : codes) {
             if (!languages.getByIsoCode(iso)) continue;
             auto result = *unicode;
             result.language = iso;
             result.languageScore = model->score(iso, sample);
             results.push_back(std::move(result));
         }
+        if (results.empty()) return {*unicode};
+        // Only the language is uncertain: one decoding, ICU's confidence.
+        for (auto& result : results) result.score = result.languageScore;
+        assignConfidence(results, NgramModel::tokenCount(sample), evidenceDivisor);
+        for (auto& result : results) {
+            result.score = unicode->score;
+            result.confidence = result.languageScore > 0 ? unicode->score : 0;
+        }
         sortResults(results);
-        if (results.empty() || results.front().languageScore == 0) return {*unicode};
+        if (results.front().languageScore == 0) return {*unicode};
         return results;
     }
     if (!model) throw std::runtime_error("Automatic legacy detection requires language models");
     const auto sample = legacySample(bytes);
     std::unordered_map<std::string, std::u32string> decoded;
-    for (const auto& iso : model->languageCodes()) {
+    std::map<std::u32string, int> decodings;
+    size_t tokens = 0;
+    for (const auto& iso : codes) {
         if (!languages.getByIsoCode(iso)) continue;
+        std::vector<std::string> names;
+        for (const auto& raw : languages.getCharsetsForLanguage(iso)) names.push_back(normalizeName(raw));
+        if (weakUtf8) names.push_back("utf8");
         std::unordered_set<std::string> seen;
-        for (const auto& raw : languages.getCharsetsForLanguage(iso)) {
-            auto name = normalizeName(raw);
+        for (const auto& name : names) {
             if (!seen.insert(name).second) continue;
             auto* cp = cpManager.getByName(name);
             if (!cp) continue;
             auto it = decoded.find(name);
-            if (it == decoded.end()) it = decoded.emplace(name, cp->toU32(sample)).first;
+            if (it == decoded.end()) {
+                it = decoded.emplace(name, cp->toU32(sample)).first;
+                tokens = std::max(tokens, NgramModel::tokenCount(it->second));
+            }
             // Undefined-byte candidates cannot provide lossless editor text.
-            if (it->second.size() != sample.size()) continue;
+            // (ICU has validated the whole input as UTF-8 already.)
+            if (name != "utf8" && it->second.size() != sample.size()) continue;
             auto score = model->score(iso, it->second);
-            results.push_back({name, score, codepageRank(name), iso, score});
+            DetectionResult result{name, score, codepageRank(name), iso, score};
+            result.decoding = decodings.emplace(it->second, static_cast<int>(decodings.size())).first->second;
+            results.push_back(result);
         }
     }
-    sortResults(results);
-    // Confirm the selected single-byte encoding preserves every byte of the
+    // Every likely single-byte candidate must also preserve every byte of the
     // complete file, including positions outside the statistical sample.
-    if (bytes.size() > samplePart * 3) {
-        while (!results.empty()) {
-            const auto name = results.front().codepage;
-            if (cpManager.getByName(name)->toU32(bytes).size() == bytes.size()) break;
+    // Failures are removed and the probabilities recomputed without them.
+    std::unordered_set<std::string> verified{"utf8"};
+    for (bool changed = true; changed;) {
+        changed = false;
+        assignConfidence(results, tokens, evidenceDivisor);
+        sortResults(results);
+        double covered = 0;
+        std::unordered_set<int> counted;
+        for (const auto& result : results) {
+            if (covered >= 1 - 1e-6) break;
+            if (counted.insert(result.decoding).second) covered += result.confidence;
+            if (!verified.insert(result.codepage).second) continue;
+            if (cpManager.getByName(result.codepage)->toU32(bytes).size() == bytes.size()) continue;
+            const auto name = result.codepage;
             results.erase(std::remove_if(results.begin(), results.end(),
-                [&](const auto& result) { return result.codepage == name; }), results.end());
+                [&](const auto& r) { return r.codepage == name; }), results.end());
+            changed = true;
+            break;
         }
     }
     return results;
+}
+
+std::vector<DetectionResult>
+Detector::plausible(const std::vector<DetectionResult>& results, double threshold) {
+    std::vector<DetectionResult> chosen;
+    std::unordered_set<int> seen;
+    double covered = 0;
+    for (const auto& result : results) {
+        if (covered >= threshold) break;
+        if (!seen.insert(result.decoding).second) continue;
+        chosen.push_back(result);
+        covered += result.confidence;
+    }
+    return chosen;
 }

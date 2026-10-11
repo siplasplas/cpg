@@ -132,6 +132,10 @@ NgramModel NgramModel::forLanguage(const std::string& iso) const {
     return result;
 }
 
+size_t NgramModel::tokenCount(std::u32string_view text) {
+    return tokens(text).size();
+}
+
 double NgramModel::score(const std::string& iso, std::u32string_view text) const {
     auto it = profiles.find(iso);
     if (it == profiles.end() || it->second.total == 0) return 0;

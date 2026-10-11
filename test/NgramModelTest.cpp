@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <fstream>
+#include <set>
 
 namespace {
 class NgramFixture : public ::testing::Test {
@@ -198,6 +199,78 @@ TEST_F(NgramFixture, ShippedModelsDetectPolishAndEnglishWithoutLanguageHint) {
     EXPECT_DOUBLE_EQ(shipped.score("pl", polish), part.score("pl", polish));
 }
 
+TEST_F(NgramFixture, ConfidenceNeedsEnoughDistinguishingText) {
+    NgramModel shipped;
+    shipped.loadDirectory(CPG_MODELS_DIR);
+    CpManager manager;
+    Languages languages;
+    languages.readFromFile(CPG_LANGUAGES_TXT);
+    Detector detector(manager, languages, &shipped);
+    auto cp1250 = manager.getByName("cp1250");
+    auto clear = detector.detectCodepage("pl", cp1250->fromU32(
+        U"Dzień dobry. Przesyłam zestawienie kosztów za wrzesień. Proszę o sprawdzenie "
+         "dokumentów i przesłanie odpowiedzi do piątku. Dziękuję za pomoc."));
+    ASSERT_FALSE(clear.empty());
+    EXPECT_EQ(clear.front().codepage, "cp1250");
+    EXPECT_GE(clear.front().confidence, 0.95);
+    EXPECT_GE(clear.front().languageConfidence, 0.95);
+    EXPECT_EQ(Detector::plausible(clear).size(), 1u);
+    // Two Polish letters in source code: amiga-fat decodes them nearly as well.
+    auto source = cp1250->fromU32(U"  InfoTabSheet.Caption := 'Programy zewnętrzne';\n"
+                                   "  OpenDial.Caption:='Wskaż program do symulacji';\n");
+    auto weak = detector.detectCodepage("pl", source);
+    ASSERT_FALSE(weak.empty());
+    EXPECT_LT(weak.front().confidence, 0.95);
+    auto alternatives = Detector::plausible(weak);
+    EXPECT_GT(alternatives.size(), 1u);
+    double sum = 0;
+    std::set<int> decodings;
+    for (const auto& result : alternatives) {
+        EXPECT_TRUE(decodings.insert(result.decoding).second);
+        sum += result.confidence;
+    }
+    EXPECT_GE(sum, 0.95);
+    // cp1250 and iso-8859-2 decode these bytes identically: one alternative.
+    auto same = [&](const std::string& name) {
+        return std::find_if(weak.begin(), weak.end(), [&](const auto& r) { return r.codepage == name; });
+    };
+    ASSERT_NE(same("cp1250"), weak.end());
+    ASSERT_NE(same("iso-8859-2"), weak.end());
+    EXPECT_EQ(same("cp1250")->decoding, same("iso-8859-2")->decoding);
+    EXPECT_DOUBLE_EQ(same("cp1250")->confidence, same("iso-8859-2")->confidence);
+    // ASCII decodes the same everywhere: certain encoding, whatever the language.
+    auto ascii = detector.detectCodepage("pl", "Plain ASCII text.");
+    ASSERT_FALSE(ascii.empty());
+    EXPECT_DOUBLE_EQ(ascii.front().confidence, 1.0);
+}
+
+TEST_F(NgramFixture, DetectionAmongLanguagesConsidersOnlyThoseLanguages) {
+    NgramModel shipped;
+    shipped.loadDirectory(CPG_MODELS_DIR);
+    CpManager manager;
+    Languages languages;
+    languages.readFromFile(CPG_LANGUAGES_TXT);
+    Detector detector(manager, languages, &shipped);
+    auto bytes = manager.getByName("cp1250")->fromU32(
+        U"Dzień dobry. Przesyłam zestawienie kosztów za wrzesień. Dziękuję za pomoc.");
+    auto results = detector.detectCodepageAmong({"pl", "cs"}, bytes);
+    ASSERT_FALSE(results.empty());
+    EXPECT_EQ(results.front().language, "pl");
+    EXPECT_EQ(results.front().codepage, "cp1250");
+    for (const auto& result : results)
+        EXPECT_TRUE(result.language == "pl" || result.language == "cz") << result.language;
+    auto unicode = detector.detectCodepageAmong({"pl", "cz"}, manager.getByName("utf8")->fromU32(
+        U"Dzień dobry. Przesyłam zestawienie kosztów za wrzesień."));
+    ASSERT_EQ(unicode.size(), 2u);
+    EXPECT_EQ(unicode.front().language, "pl");
+    // One language behaves like the known-language overload; auto means all.
+    auto single = detector.detectCodepageAmong({"pl"}, bytes);
+    auto known = detector.detectCodepage("pl", bytes);
+    ASSERT_EQ(single.size(), known.size());
+    EXPECT_EQ(single.front().codepage, known.front().codepage);
+    EXPECT_EQ(detector.detectCodepageAmong({"auto"}, bytes).size(), detector.detectCodepage(bytes).size());
+}
+
 TEST_F(NgramFixture, PrunedModelWithMissingPrefixIsRejected) {
     std::ofstream out(path);
     out << "CPG_NGRAM 2\npruning 5\nlanguage bad 10\norder 1 1\n97 10\n"
@@ -225,7 +298,6 @@ TEST_F(NgramFixture, DetectorUsesModelAfterUnicodeAndRejectsDroppedBytes) {
     auto bytes = cp1250->fromU32(text) + char(0x81);
     auto damaged = detector.detectCodepage("pl", bytes);
     auto it = std::find_if(damaged.begin(), damaged.end(), [](const auto& r) { return r.codepage == "cp1250"; });
-    ASSERT_NE(it, damaged.end());
-    EXPECT_EQ(it->score, 0);
+    EXPECT_EQ(it, damaged.end());
 }
 }

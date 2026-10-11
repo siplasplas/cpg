@@ -29,7 +29,10 @@ public:
     std::vector<std::string> languageCodes() const;
     NgramModel forLanguage(const std::string& iso) const;
     bool contains(const std::string& iso) const;
+    // Geometric mean probability of the text's tokens.
     double score(const std::string& iso, std::u32string_view text) const;
+    // Number of tokens score() averages over (letters and word boundaries).
+    static size_t tokenCount(std::u32string_view text);
     void save(const std::filesystem::path& path, bool compactBinary = false) const;
     void load(const std::filesystem::path& path);
     void loadDirectory(const std::filesystem::path& path);

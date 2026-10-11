@@ -63,6 +63,14 @@ with tempfile.TemporaryDirectory(prefix="cpg-corpus-test-") as temporary:
     run("benchmark", "--corpus", corpus, "--model", split, "--output", report,
         "--samples", "3", "--mode", "auto")
     run("detect", "--model", compressed, "--input", sample, "--output", sample, success=False)
+    # Too little distinguishing text: no conversion, exit code 2, alternatives listed.
+    sample.write_bytes("Wskaż program.".encode("cp1250"))
+    refused = subprocess.run([tool, "detect", "--model", split, "--input", sample, "--output",
+                              decoded, "--min-confidence", "0.999999"], capture_output=True, text=True)
+    assert refused.returncode == 2, refused.stdout + refused.stderr
+    assert "uncertain:" in refused.stderr and "not converted" in refused.stderr, refused.stderr
+    run("detect", "--model", split, "--input", sample, "--min-confidence", "2", success=False)
+    sample.write_bytes(text.encode("cp1250"))
     pruned = root / "pl-pruned.ngram"
     run("compact", "--model", model, "--output", pruned, "--keep-percent", "10", "--lang", "pl")
     trained_small = root / "pl-trained.ngram"
