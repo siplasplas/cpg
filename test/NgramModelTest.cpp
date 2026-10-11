@@ -254,6 +254,38 @@ TEST_F(NgramFixture, ConfidenceNeedsEnoughDistinguishingText) {
     EXPECT_DOUBLE_EQ(ascii.front().confidence, 1.0);
 }
 
+TEST_F(NgramFixture, PreviewShowsWhereOptionsDiffer) {
+    CpManager manager;
+    Languages languages;
+    languages.readFromFile(CPG_LANGUAGES_TXT);
+    Detector detector(manager, languages, &model);
+    auto option = [](const std::string& codepage) {
+        DetectionResult result{codepage, 0.5, 1, "pl"};
+        return result;
+    };
+    // cp1250 and iso-8859-2 differ in ś (0x9C / 0xB6), not in ó, ł, ż and ę.
+    auto bytes = manager.getByName("cp1250")->fromU32(
+        U"Mój kot je łyżkę.\n    Napis := 'Świeży śnieg';\nMój kot je łyżkę.\nNapis := 'Świeży śnieg';\n"
+        "To jest bardzo długa linia, w której różnica pojawia się dopiero daleko: ś na końcu tej linii.\n");
+    auto lines = detector.preview(bytes, {option("cp1250"), option("iso-8859-2")});
+    ASSERT_EQ(lines.size(), 2u); // the repeated line once, the line without ś not at all
+    EXPECT_EQ(lines[0].variants[0], "Napis := 'Świeży śnieg';"); // leading spaces trimmed
+    EXPECT_NE(lines[0].variants[1], lines[0].variants[0]);
+    EXPECT_EQ(lines[0].byteOffset, bytes.find("Napis"));
+    EXPECT_EQ(lines[1].variants[0].rfind("…", 0), 0u); // a cut line
+    EXPECT_NE(lines[1].variants[0].find("ś na końcu"), std::string::npos);
+    // UTF-8 against cp1250: every non-ASCII byte differs; undefined bytes are visible.
+    auto utf8 = manager.getByName("utf8")->fromU32(U"Zatwierdź\n");
+    auto mixed = detector.preview(utf8, {option("utf8"), option("cp1250")});
+    ASSERT_EQ(mixed.size(), 1u);
+    EXPECT_EQ(mixed[0].variants[0], "Zatwierdź");
+    EXPECT_EQ(mixed[0].variants[1], "ZatwierdĹş");
+    auto undefined = detector.preview(std::string("A\x81"), {option("cp1250"), option("iso-8859-2")});
+    ASSERT_EQ(undefined.size(), 1u);
+    EXPECT_EQ(undefined[0].variants[0], "A�");
+    EXPECT_TRUE(detector.preview(bytes, {option("cp1250")}).empty());
+}
+
 TEST_F(NgramFixture, DetectionAmongLanguagesConsidersOnlyThoseLanguages) {
     NgramModel shipped;
     shipped.loadDirectory(CPG_MODELS_DIR);

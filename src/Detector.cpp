@@ -1,6 +1,7 @@
 #include <cpg/Detector.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <limits>
@@ -428,4 +429,86 @@ Detector::plausible(const std::vector<DetectionResult>& results, double threshol
         covered += result.confidence;
     }
     return chosen;
+}
+
+std::vector<PreviewLine>
+Detector::preview(std::string_view bytes, const std::vector<DetectionResult>& options,
+                  size_t maxLines) const {
+    std::vector<Codepage*> codepages;
+    bool utf8 = false;
+    for (const auto& option : options) {
+        auto* cp = cpManager.getByName(option.codepage);
+        if (!cp) return {};
+        if (option.codepage == "utf8") utf8 = true;
+        else if (cp->maxCharLen() != 1) return {}; // UTF-16/32 have no byte lines
+        codepages.push_back(cp);
+    }
+    if (codepages.size() < 2 || maxLines == 0) return {};
+    const auto byte = [&](size_t i) { return static_cast<unsigned char>(bytes[i]); };
+    // Which non-ASCII bytes the options decode differently. Against UTF-8
+    // every one does; ASCII is the same everywhere.
+    std::array<bool, 256> differs{};
+    for (int b = 0x80; b < 0x100; ++b) {
+        const std::string one(1, static_cast<char>(b));
+        for (auto* cp : codepages)
+            differs[b] = differs[b] || utf8 || cp->toU32(one) != codepages.front()->toU32(one);
+    }
+
+    struct Piece { size_t from, to, lineStart, lineEnd, count; };
+    std::vector<Piece> pieces;
+    std::unordered_set<std::string_view> seen;
+    constexpr size_t before = 30, after = 50, scanLimit = 1000;
+    for (size_t start = 0; start < bytes.size() && pieces.size() < scanLimit;) {
+        size_t end = std::min(bytes.find('\n', start), bytes.size());
+        size_t first = start;
+        while (first < end && !differs[byte(first)]) ++first;
+        if (first < end) {
+            size_t lineEnd = end;
+            while (lineEnd > start && (bytes[lineEnd - 1] == '\r' || bytes[lineEnd - 1] == ' ')) --lineEnd;
+            size_t lineStart = start;
+            while (lineStart < first && (bytes[lineStart] == ' ' || bytes[lineStart] == '\t')) ++lineStart;
+            // Bytes before the first distinguishing one are single-byte
+            // characters; the end moves on to an ASCII byte, never inside a
+            // UTF-8 sequence.
+            size_t from = first - std::min(first - lineStart, before);
+            size_t to = std::min(lineEnd, first + after);
+            while (to < lineEnd && byte(to) >= 0x80) ++to;
+            size_t count = 0;
+            for (size_t i = from; i < to; ++i) count += differs[byte(i)];
+            if (seen.insert(bytes.substr(from, to - from)).second)
+                pieces.push_back({from, to, lineStart, lineEnd, count});
+        }
+        start = end + 1;
+    }
+    std::stable_sort(pieces.begin(), pieces.end(),
+                     [](const auto& a, const auto& b) { return a.count > b.count; });
+    if (pieces.size() > maxLines) pieces.resize(maxLines);
+
+    auto* out = cpManager.getByName("utf8");
+    const auto display = [](char32_t c) {
+        return (c < 0x20 && c != '\t') || (c >= 0x7F && c < 0xA0) ? U'�' : c;
+    };
+    std::vector<PreviewLine> lines;
+    for (const auto& piece : pieces) {
+        PreviewLine line{piece.from, {}};
+        const auto text = bytes.substr(piece.from, piece.to - piece.from);
+        for (size_t k = 0; k < codepages.size(); ++k) {
+            std::u32string decoded;
+            if (options[k].codepage == "utf8") {
+                decoded = codepages[k]->toU32(text);
+            } else {
+                // Byte by byte, so that undefined bytes stay visible.
+                for (char c : text) {
+                    auto one = codepages[k]->toU32(std::string_view(&c, 1));
+                    decoded += one.empty() ? std::u32string(1, U'�') : one;
+                }
+            }
+            for (auto& c : decoded) c = display(c);
+            if (piece.from > piece.lineStart) decoded.insert(0, U"…");
+            if (piece.to < piece.lineEnd) decoded += U"…";
+            line.variants.push_back(out->fromU32(decoded));
+        }
+        lines.push_back(std::move(line));
+    }
+    return lines;
 }

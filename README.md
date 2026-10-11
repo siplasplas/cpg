@@ -43,6 +43,24 @@ if (alternatives.size() == 1 && alternatives.front().confidence >= 0.95) {
 }
 ```
 
+To let a person choose, `detector.preview(bytes, alternatives)` returns up to
+five pieces of the input (single lines, about 80 bytes) where the alternatives
+decode differently, each in every alternative, as UTF-8:
+
+```
+uncertain: amiga-fat/pl 0.524735, cp1250/pl 0.434362
+  byte 30227:
+    amiga-fat/pl      OpenDial.Caption:='Wska¿ program do symulacji';
+    cp1250/pl         OpenDial.Caption:='Wskaż program do symulacji';
+```
+
+Only bytes that the alternatives decode differently count, so a line with
+just "ó" or "ł" is not shown for cp1250 against iso-8859-2. Pieces with the
+most such bytes come first; repeated pieces appear once. Undefined bytes and
+control characters show as U+FFFD, a cut line as "…". The model compares
+lowercase text, so alternatives differing only in letter case (smc against
+cp1250: "ś" / "Ś") tie, but are obvious in the preview.
+
 The log likelihood ratio is divided by an evidence divisor (default 8,
 `setEvidenceDivisor`) chosen on held-out corpus samples: the raw ratio is
 overconfident because neighbouring characters are not independent and rare
@@ -195,7 +213,7 @@ build/cpg_corpus detect --model data/models --input document.txt --output decode
 
 `detect` prints the candidates with `confidence` and `language_confidence`
 columns and reports `confident: …` or `uncertain: …` with the alternatives on
-stderr. With `--output` it refuses to convert (exit code 2) when the winner's
+stderr, followed by their preview when uncertain. With `--output` it refuses to convert (exit code 2) when the winner's
 confidence is below `--min-confidence` (default 0.95).
 
 ```sh

@@ -22,6 +22,12 @@ struct DetectionResult {
     int decoding = -1; // results with the same value decode the input identically
 };
 
+// A piece of the input shown in every proposed encoding, for a person to choose.
+struct PreviewLine {
+    size_t byteOffset = 0;             // start of the piece in the input
+    std::vector<std::string> variants; // the piece in UTF-8, one per option, in option order
+};
+
 class Detector {
     CpManager& cpManager;
     Languages& languages;
@@ -60,6 +66,17 @@ public:
     // alone. Expects sorted detectCodepage() results.
     static std::vector<DetectionResult> plausible(const std::vector<DetectionResult>& results,
                                                   double threshold = 0.95);
+
+    // Up to maxLines pieces of the input (single lines, about 80 bytes around
+    // the first distinguishing byte) where the options decode differently,
+    // e.g. for plausible() alternatives. Pieces with the most distinguishing
+    // bytes come first, then in file order; repeated pieces appear once.
+    // Bytes a codepage leaves undefined and control characters show as
+    // U+FFFD; "…" marks a cut line. Only single-byte codepages and UTF-8;
+    // empty for fewer than two options.
+    std::vector<PreviewLine> preview(std::string_view bytes,
+                                     const std::vector<DetectionResult>& options,
+                                     size_t maxLines = 5) const;
 
     // Confidence treats the model's log likelihood ratio, divided by this
     // value, as the evidence. Neighbouring characters are not independent and

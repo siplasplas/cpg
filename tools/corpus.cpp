@@ -475,6 +475,15 @@ void detect(const Options& options, Languages& languages, CpManager& manager) {
                    std::to_string(result.confidence);
     std::cerr << (alternatives.size() == 1 && alternatives.front().confidence >= minimum
                   ? "confident: " : "uncertain: ") << summary << '\n';
+    // For a person to choose: where the alternatives differ.
+    for (const auto& line : detector.preview(bytes, alternatives)) {
+        std::cerr << "  byte " << line.byteOffset << ":\n";
+        for (size_t k = 0; k < alternatives.size(); ++k) {
+            auto label = alternatives[k].codepage + '/' + alternatives[k].language;
+            std::cerr << "    " << label << std::string(label.size() < 18 ? 18 - label.size() : 1, ' ')
+                      << line.variants[k] << '\n';
+        }
+    }
     if (options.count("--output")) {
         if (fs::weakly_canonical(options.at("--output")) == fs::weakly_canonical(options.at("--input")) ||
             (fs::exists(options.at("--output")) && fs::equivalent(options.at("--output"), options.at("--input"))))
