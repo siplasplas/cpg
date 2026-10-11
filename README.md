@@ -7,7 +7,9 @@ Detection through `Detector::detectCodepage(language, bytes)` runs in two stages
 
 1. ICU checks the input. If its best match is UTF-8, UTF-16LE/BE or UTF-32LE/BE,
    has confidence of at least 80/100, and passes strict decoding, detection
-   returns that encoding. This stage does not require a known language.
+   returns that encoding. This stage does not require a known language. With a
+   model, UTF-8 without a BOM is instead validated by the detector and
+   competes with the legacy candidates in stage 2.
 2. Otherwise, the detector ranks codepages associated with the supplied language
    using corpus-trained character models. In automatic mode it ranks language
    and codepage pairs; with a known language it searches only that language's
@@ -80,23 +82,8 @@ Detector detector(codepages, languages);
 auto candidates = detector.detectCodepage("pl", bytes);
 ```
 
-For an editor that opens unknown text files automatically:
-
-```cpp
-NgramModel model;
-model.loadDirectory("data/models"); // all 32 language profiles
-Detector detector(codepages, languages, &model);
-auto candidates = detector.detectCodepage(bytes); // no language question
-if (!candidates.empty()) {
-    const auto& best = candidates.front();
-    Converter converter(codepages);
-    auto decoded = converter.toUtf8(best.codepage, bytes);
-    if (decoded.success) {
-        // Edit decoded.output as UTF-8; remember best.codepage for saving.
-        // best.language contains the inferred language key.
-    }
-}
-```
+For an editor that opens unknown text files, see
+[Opening files in an editor](#opening-files-in-an-editor-eg-qcodeedit).
 
 When the file is known to be in one of a few languages, restrict the search:
 `detector.detectCodepageAmong({"pl", "cz"}, bytes)` (multiple languages need
@@ -105,8 +92,9 @@ their models; one language behaves like `detectCodepage("pl", bytes)`).
 Load `data/models/pl.ngram` alone when Polish is known. Unicode detection uses
 ICU first, then models rank the decoded text's language. Automatic legacy
 detection compares language/codepage pairs. Legacy statistics use a sample of
-up to 6144 bytes made of the words containing non-ASCII bytes, with one word on
-each side, since ASCII decodes the same in every candidate (in source code the
+up to 6144 bytes made of the non-ASCII bytes with at least 16 bytes of context
+on each side, extended to whole words within the line, since ASCII decodes the
+same in every candidate (in source code the
 national characters may sit only in a few comments, and the surrounding code
 would be misleading language evidence); input without non-ASCII bytes samples
 2048 bytes at the beginning, middle and end. The same sample is used with a
@@ -120,6 +108,84 @@ mixed-language or unsupported-language text can still be misidentified; check
 
 The `convcp` demo still requires explicit encodings; `cpg_corpus detect` provides
 automatic identification and optional UTF-8 output.
+
+## Opening files in an editor (e.g. QCodeEdit)
+
+The editor keeps a UTF-8 buffer and remembers the file's original encoding for
+saving. Detection decides it automatically only when it is confident; otherwise
+the person chooses from a few alternatives with a preview.
+
+Setup, once (the model and `CpManager` must outlive the detector):
+
+```cpp
+CpManager codepages;
+Languages languages;
+// Paths from the CMake variables CPG_LANGUAGES_FILE / CPG_MODELS_DIR,
+// e.g. passed as compile definitions (see Using cpg from CMake).
+languages.readFromFile(languagesFile);         // share/cpg/languages.txt
+NgramModel model;
+model.loadDirectory(modelsDir);                // share/cpg/models, 32 languages
+Detector detector(codepages, languages, &model);
+Converter converter(codepages);
+```
+
+Opening a file:
+
+```cpp
+std::string bytes = /* the whole file, binary */;
+// The user's languages when known (settings), otherwise detectCodepage(bytes).
+auto results = detector.detectCodepageAmong({"pl", "cz"}, bytes);
+auto options = Detector::plausible(results);   // best first, one per distinct text
+if (options.empty()) {
+    // Empty file: open as UTF-8 (or the user's default encoding).
+} else if (options.size() == 1 && options.front().confidence >= 0.95) {
+    open(options.front().codepage);            // confident: no question
+} else {
+    // Ask. Each option: codepage, language, confidence (show as a percentage).
+    auto lines = detector.preview(bytes, options);
+    // Table: one row per line (lines[i].byteOffset), one column per option
+    // (lines[i].variants[k] is the line decoded with options[k], UTF-8).
+}
+
+void open(const std::string& codepage) {
+    auto decoded = converter.toUtf8(codepage, bytes);
+    if (decoded.success) {
+        // Edit decoded.output; remember codepage (and a leading BOM, if the
+        // editor strips U+FEFF from its buffer) for saving.
+    }
+}
+```
+
+Saving: `converter.fromUtf8(codepage, text)` rejects characters the original
+encoding cannot store and lists them (see the next section); then offer saving
+as UTF-8 instead.
+
+Notes for the dialog:
+
+- `confidence` is calibrated: on held-out corpus text, winners with confidence
+  ≥ 0.95 were right in 99.92–99.97% of cases. Options are sorted by
+  confidence and together cover at least 95%; in the uncertain files of the
+  test project the right encoding was always among them.
+- Options with identical text are merged (cp1250 and iso-8859-2 without the
+  bytes that differ), so every option shows a different text.
+- The preview shows only lines where the options differ, ordered by the
+  number of differing bytes, then by position. It deliberately does not order
+  lines by how strongly they speak against the most likely option: when the
+  model is wrong, such an order would put misleading lines first and steer
+  the person towards the wrong choice. The person should judge the plain
+  differences.
+- Model-invisible differences, such as letter case only ("przenieśc" /
+  "przenieŚc"), are obvious in the preview.
+- Pure ASCII and empty files are certain: every encoding gives the same text.
+- Detection reads a sample of at most about 6 KB around non-ASCII bytes and
+  then checks the likely candidates against the whole file, so large files
+  are fast; `preview()` stops after 1000 differing lines.
+- For a known single language `detectCodepage("pl", bytes)` is the same as
+  `detectCodepageAmong({"pl"}, bytes)`; loading only `pl.ngram` is enough then.
+- Thresholds and priors are adjustable: `plausible(results, threshold)`,
+  `setEvidenceDivisor`, `setUtf8Evidence`, `setCasePenalty`,
+  `setRarityPenalty`. The defaults come from the corpus benchmark (see
+  Corpus training and evaluation).
 
 ## UTF-8 editing and saving in the original codepage
 
