@@ -84,10 +84,12 @@ national characters may sit only in a few comments, and the surrounding code
 would be misleading language evidence); input without non-ASCII bytes samples
 2048 bytes at the beginning, middle and end. The same sample is used with a
 known language. Likely candidates are then checked against the whole file for
-undefined bytes; failures are removed and the confidence recomputed. Unicode language scoring
-samples decoded codepoints at the beginning, middle and end. Small files use all
-their text. Language scores are likelihood rankings, not calibrated confidence;
-short, mixed-language or unsupported-language text can be misidentified.
+undefined bytes; failures are removed and the confidence recomputed. Unicode
+language scoring samples the decoded text the same way, around non-ASCII
+characters (otherwise beginning, middle and end), so source code with Polish
+comments is Polish, not the language the code happens to resemble. Short,
+mixed-language or unsupported-language text can still be misidentified; check
+`languageConfidence`.
 
 The `convcp` demo still requires explicit encodings; `cpg_corpus detect` provides
 automatic identification and optional UTF-8 output.

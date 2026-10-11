@@ -140,7 +140,10 @@ double NgramModel::score(const std::string& iso, std::u32string_view text) const
     auto it = profiles.find(iso);
     if (it == profiles.end() || it->second.total == 0) return 0;
     auto input = tokens(text);
-    if (input.empty()) return 0;
+    if (text.empty()) return 0;
+    // Only punctuation, digits or spaces: one word boundary, not an
+    // impossible text (e.g. a "• 31" piece decoded with a bullet).
+    if (input.empty()) input = U" ";
     const auto& p = it->second;
     double logSum = 0;
     uint64_t previous = 0, pair = 0;

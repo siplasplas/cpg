@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <type_traits>
 #include <unordered_set>
 #include <unordered_map>
 #include <unicode/ucnv.h>
@@ -171,33 +172,36 @@ std::basic_string<Char> modelSample(std::basic_string_view<Char> input) {
 // In source code those may be a few comments that a beginning/middle/end
 // sample would miss, and the surrounding code would act as (misleading)
 // language evidence, e.g. Pascal looking more Danish than Polish. The sample
-// is made of the words with non-ASCII bytes and one word on each side, within
-// the line (up to the usual size); input without any falls back to
-// modelSample().
-std::string legacySample(std::string_view input) {
-    const size_t budget = samplePart * 3;
-    const auto high = [&](size_t i) { return static_cast<unsigned char>(input[i]) >= 0x80; };
+// is made of the non-ASCII bytes with at least 16 bytes of context on each
+// side, extended to whole words, within the line (up to the usual size);
+// input without any falls back to modelSample(). Decoded Unicode text is
+// sampled the same way for its language (non-ASCII characters).
+template<class Char>
+std::basic_string<Char> nonAsciiSample(std::basic_string_view<Char> input) {
+    const size_t budget = samplePart * 3, context = 16;
+    const auto high = [&](size_t i) {
+        return static_cast<std::make_unsigned_t<Char>>(input[i]) >= 0x80;
+    };
     const auto space = [&](size_t i) { return input[i] == ' ' || input[i] == '\t' || input[i] == '\r'; };
-    std::string sample;
+    std::basic_string<Char> sample;
     size_t covered = 0; // end of the previous piece
     for (size_t i = 0; i < input.size() && sample.size() < budget; ++i) {
         if (!high(i)) continue;
-        // Back to the start of the previous word, at most 64 bytes and not
-        // into the previous piece or line; these bytes are ASCII.
+        // Back 16 bytes and on to a word start, at most 64 bytes and not into
+        // the previous piece or line; these bytes are ASCII.
         size_t from = i;
-        for (int starts = 0; from > covered && input[from - 1] != '\n' && i - from < 64; --from)
-            if (space(from - 1) && !space(from) && ++starts == 2) break;
-        // Forward to the end of the next word; past 64 bytes stop at
-        // whitespace, which is never inside a multi-byte (e.g. UTF-8) character.
+        while (from > covered && input[from - 1] != '\n' && i - from < 64 &&
+               (i - from < context || !space(from - 1))) --from;
+        // Forward likewise to a word end; past 64 bytes stop at whitespace,
+        // which is never inside a multi-byte (e.g. UTF-8) character.
         size_t to = i;
-        for (int ends = 0; to < input.size() && input[to] != '\n' && (to - i < 64 || !space(to)); ++to)
-            if (space(to) && !space(to - 1) && ++ends == 2) break;
+        while (to < input.size() && input[to] != '\n' && (to - i < context || !space(to))) ++to;
         sample.append(input.substr(from, to - from));
         sample.push_back(' ');
         covered = to;
         i = to;
     }
-    return sample.empty() ? modelSample<char>(input) : sample;
+    return sample.empty() ? modelSample<Char>(input) : sample;
 }
 
 } // namespace
@@ -310,7 +314,7 @@ Detector::detectAuto(const std::vector<std::string>& isos, std::string_view byte
         unicode->confidence = unicode->score;
         if (!model) return {*unicode};
         auto text = cpManager.getByName(unicode->codepage)->toU32(bytes);
-        auto sample = modelSample<char32_t>(text);
+        auto sample = nonAsciiSample<char32_t>(text);
         for (const auto& iso : codes) {
             if (!languages.getByIsoCode(iso)) continue;
             auto result = *unicode;
@@ -331,7 +335,7 @@ Detector::detectAuto(const std::vector<std::string>& isos, std::string_view byte
         return results;
     }
     if (!model) throw std::runtime_error("Automatic legacy detection requires language models");
-    const auto sample = legacySample(bytes);
+    const auto sample = nonAsciiSample<char>(bytes);
     std::unordered_map<std::string, std::u32string> decoded;
     std::map<std::u32string, int> decodings;
     size_t tokens = 0;

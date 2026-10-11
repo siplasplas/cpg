@@ -238,6 +238,16 @@ TEST_F(NgramFixture, ConfidenceNeedsEnoughDistinguishingText) {
     ASSERT_NE(same("iso-8859-2"), weak.end());
     EXPECT_EQ(same("cp1250")->decoding, same("iso-8859-2")->decoding);
     EXPECT_DOUBLE_EQ(same("cp1250")->confidence, same("iso-8859-2")->confidence);
+    // UTF-8 source code: the language comes from the Polish words, not the code.
+    std::string code;
+    for (int i = 0; i < 40; ++i)
+        code += "  if Assigned(FList) then FList.Clear; Inc(Counter, Length(Items));\n";
+    code += "  // Usuwamy wszystkie zaznaczone obiekty z bieżącej warstwy\n";
+    for (int i = 0; i < 40; ++i) code += "  Result := FindComponent(Name) as TControl;\n";
+    auto commented = detector.detectCodepage(code + "  // Zażółć gęślą jaźń\n"); // UTF-8 literals
+    ASSERT_FALSE(commented.empty());
+    EXPECT_EQ(commented.front().codepage, "utf8");
+    EXPECT_EQ(commented.front().language, "pl");
     // ASCII decodes the same everywhere: certain encoding, whatever the language.
     auto ascii = detector.detectCodepage("pl", "Plain ASCII text.");
     ASSERT_FALSE(ascii.empty());

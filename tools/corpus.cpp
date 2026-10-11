@@ -279,6 +279,17 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
         for (const auto& [iso, path] : corpusFiles(testOptions, languages)) testFiles[iso] = path;
     }
     size_t samples = positive(options, "--samples", 100);
+    // ASCII text (e.g. source code) put before and after every sample.
+    constexpr size_t asciiContextBytes = 2048;
+    std::u32string asciiContext;
+    if (options.count("--ascii-context")) {
+        std::ifstream in(options.at("--ascii-context"), std::ios::binary);
+        if (!in) throw std::runtime_error("Cannot read --ascii-context");
+        for (char c; in.get(c);)
+            if (static_cast<unsigned char>(c) < 0x80) asciiContext.push_back(static_cast<char32_t>(c));
+        if (asciiContext.size() < asciiContextBytes)
+            throw std::runtime_error("--ascii-context needs at least 2048 ASCII bytes");
+    }
     const auto mode = options.count("--mode") ? options.at("--mode") : "known";
     if (mode != "known" && mode != "auto") throw std::runtime_error("--mode must be known or auto");
     fs::path output(required(options, "--output"));
@@ -297,6 +308,7 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
     const std::vector<double> calibrationBins{0, 0.5, 0.8, 0.9, 0.95, 0.99, 0.999, 1};
     struct Cell { size_t count = 0, correct = 0; double confidence = 0; };
     std::map<std::pair<size_t, size_t>, Cell> calibration;
+    std::ofstream errors(output.string() + ".errors.txt"); // confident but wrong winners
     for (const auto& [iso, path] : files) {
         auto info = readCorpus(path, iso, nullptr, testFiles.empty());
         if (!model.contains(iso) || !source.count(iso) ||
@@ -317,7 +329,15 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
             }
             for (size_t sample = 0; sample < samples; ++sample) {
                 size_t start = random() % (info.test.size() - length + 1);
-                std::u32string_view text(info.test.data() + start, length);
+                std::u32string text(info.test.data() + start, length);
+                if (!asciiContext.empty()) {
+                    // Mostly ASCII input, like national comments in source code.
+                    auto piece = [&] {
+                        size_t from = random() % (asciiContext.size() - asciiContextBytes + 1);
+                        return asciiContext.substr(from, asciiContextBytes);
+                    };
+                    text = piece() + U'\n' + text + U'\n' + piece();
+                }
                 for (const auto& name : names) {
                     auto& row = rows[{name, length}];
                     ++row.attempted;
@@ -325,7 +345,7 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
                     auto encoded = cp->fromU32(text);
                     // Strict roundtrip: never evaluate '?' replacement or a
                     // lossy custom mapping as a correctly encoded sample.
-                    if (encoded.size() != length || cp->toU32(encoded) != text) {
+                    if (encoded.size() != text.size() || cp->toU32(encoded) != text) {
                         ++row.skipped;
                         continue;
                     }
@@ -359,8 +379,16 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
                                                       confidence) - calibrationBins.begin() - 1;
                         auto& cell = calibration[{length, bin}];
                         ++cell.count;
-                        cell.correct += newCp && newCp->toU32(encoded) == text;
+                        bool correct = newCp && newCp->toU32(encoded) == text;
+                        cell.correct += correct;
                         cell.confidence += confidence;
+                        if (!correct && confidence >= 0.95) {
+                            auto* utf8 = manager.getByName("utf8");
+                            errors << iso << ' ' << name << ' ' << length << " -> " << newName << '/'
+                                   << newResults.front().language << ' ' << confidence << "\n  true: "
+                                   << utf8->fromU32(text) << "\n  got:  "
+                                   << (newCp ? utf8->fromU32(newCp->toU32(encoded)) : "") << '\n';
+                        }
                     }
                 }
             }
@@ -474,6 +502,7 @@ void help() {
         "                       [--test-corpus DIR] (fixed test set for comparing corpus sizes)\n"
         "                       [--mode known|auto] (default: known)\n"
         "                       [--evidence-divisor X] (default: 8; confidence calibration)\n"
+        "                       [--ascii-context FILE] (2048 ASCII bytes around each sample)\n"
         "  cpg_corpus detect --model MODEL_OR_DIR --input FILE [--lang ISO[,ISO...]|auto]\n"
         "                    [--output UTF8_FILE] [--min-confidence 0..1] (default: 0.95)\n"
         "Detection defaults to automatic language + codepage selection.\n"
@@ -494,7 +523,7 @@ int main(int argc, char** argv) {
         if (command == "train") allowed.insert({"--corpus", "--output", "--keep-percent", "--format"});
         else if (command == "compact") allowed.insert({"--model", "--output", "--keep-percent", "--format"});
         else if (command == "split") allowed.insert({"--model", "--output-dir", "--keep-percent", "--format"});
-        else if (command == "benchmark") allowed.insert({"--corpus", "--model", "--output", "--samples", "--test-corpus", "--mode", "--manifest", "--evidence-divisor"});
+        else if (command == "benchmark") allowed.insert({"--corpus", "--model", "--output", "--samples", "--test-corpus", "--mode", "--manifest", "--evidence-divisor", "--ascii-context"});
         else if (command == "detect") allowed.insert({"--model", "--input", "--output", "--min-confidence"});
         else throw std::runtime_error("Unknown command: " + command);
         Options options;
