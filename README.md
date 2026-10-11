@@ -251,7 +251,7 @@ data (`share/cpg/languages.txt`, `share/cpg/models/*.ngram`) with a CMake
 package. ICU (uc, i18n) and zlib are required by consumers as well.
 
 ```cmake
-find_package(cpg 1.1 REQUIRED)
+find_package(cpg 1.2 REQUIRED)
 target_link_libraries(app PRIVATE cpg::cpg)
 # Paths of the detection data, e.g. for a compile definition:
 #   CPG_LANGUAGES_FILE  -> .../share/cpg/languages.txt
