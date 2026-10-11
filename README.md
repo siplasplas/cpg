@@ -24,9 +24,12 @@ decoding gives the right text. Candidates decoding the input identically (for
 example cp1250 and iso-8859-2 when no differing byte occurs, or any codepage
 for pure ASCII) share one `decoding` and one confidence. High confidence needs
 enough distinguishing text and a clear lead over the other decodings;
-`languageConfidence` is the analogous probability of the language. Valid UTF-8
-with only a few multi-byte sequences (ICU confidence 80) competes with the
-legacy decodings, since e.g. Polish "Ół" in cp1250 is valid UTF-8 too.
+`languageConfidence` is the analogous probability of the language. With a
+model, strictly valid UTF-8 without a BOM competes with the legacy decodings,
+since e.g. Polish "Ół" in cp1250 is valid UTF-8 too; every multi-byte sequence
+adds 2 nats of evidence for UTF-8 (`setUtf8Evidence`), as such sequences rarely
+arise by chance. ICU is not asked about UTF-8 then: for short text its best
+guess may be another charset. UTF-8 with a BOM and UTF-16/32 follow ICU.
 `Detector::plausible(results, 0.95)` returns the confident winner alone, or
 otherwise the smallest set of alternatives (one per decoding) whose
 confidence adds up to 0.95, for an editor to ask about rather than convert.
@@ -297,7 +300,18 @@ guarantee improvement; examine individual languages and sample lengths.
 `.csv.calibration.csv` groups the model's winners by confidence: in a
 calibrated detector about a fraction `c` of the winners with confidence `c`
 give the right text. The tool prints how many winners reached 0.95 and how
-many of those were wrong. `--evidence-divisor X` tries another divisor.
+many of those were wrong. `--evidence-divisor X` and `--utf8-evidence X` try
+other values; `--ascii-context FILE` embeds every sample in 2048 ASCII bytes
+before and after (mostly ASCII files such as source code), and
+`.csv.errors.txt` lists the confident but wrong winners. Every language's
+samples are also encoded in UTF-8, which competes with the legacy encodings.
+
+Measured on held-out lines of the 20MB corpus (32 languages, 32–2048
+characters, known and automatic language, plain and in ASCII context):
+winners with confidence ≥ 0.95 are right in 99.6–99.8% of cases, UTF-8
+samples are decoded correctly in 99.98–100%. A UTF-8 evidence of 5 nats per
+sequence would let legacy Polish capitals that happen to be valid UTF-8
+(e.g. "WRÓŻKA" in cp1250) win confidently; 2 does not.
 
 Applications can load the same model directly:
 

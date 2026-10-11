@@ -60,6 +60,26 @@ std::optional<DetectionResult> detectUnicode(std::string_view bytes) {
     return DetectionResult{canonical, confidence / 100.0, 0};
 }
 
+// Number of multi-byte sequences in strictly valid UTF-8 (no overlong forms,
+// surrogates or code points above U+10FFFF); 0 for invalid UTF-8 or ASCII.
+size_t utf8Sequences(std::string_view bytes) {
+    size_t sequences = 0;
+    for (size_t i = 0; i < bytes.size();) {
+        const auto c = static_cast<unsigned char>(bytes[i]);
+        if (c < 0x80) { ++i; continue; }
+        size_t length = c >= 0xC2 && c <= 0xDF ? 2 : c >= 0xE0 && c <= 0xEF ? 3 : c >= 0xF0 && c <= 0xF4 ? 4 : 0;
+        if (length == 0 || i + length > bytes.size()) return 0;
+        const auto second = static_cast<unsigned char>(bytes[i + 1]);
+        if ((c == 0xE0 && second < 0xA0) || (c == 0xED && second > 0x9F) ||
+            (c == 0xF0 && second < 0x90) || (c == 0xF4 && second > 0x8F)) return 0;
+        for (size_t k = 1; k < length; ++k)
+            if ((static_cast<unsigned char>(bytes[i + k]) & 0xC0) != 0x80) return 0;
+        ++sequences;
+        i += length;
+    }
+    return sequences;
+}
+
 std::string toLowerAscii(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(),
                    [](unsigned char c) { return (char) std::tolower(c); });
@@ -125,13 +145,17 @@ void sortResults(std::vector<DetectionResult>& results) {
 // Posterior probabilities with equal priors for every (decoding, language)
 // pair: P ~ score^(tokens / divisor). Candidates sharing a decoding and
 // language have the same score and count once. confidence = P(decoding),
-// languageConfidence = P(language) over all decodings.
-void assignConfidence(std::vector<DetectionResult>& results, size_t tokens, double divisor) {
+// languageConfidence = P(language) over all decodings. `utf8Bonus` (natural
+// log of odds) favours the UTF-8 decoding: valid multi-byte sequences rarely
+// arise by chance in legacy text.
+void assignConfidence(std::vector<DetectionResult>& results, size_t tokens, double divisor,
+                      double utf8Bonus = 0) {
     std::map<std::pair<int, std::string>, double> joint;
     double best = -std::numeric_limits<double>::infinity();
     for (const auto& result : results) {
         if (result.score <= 0) continue;
         double logit = tokens * std::log(result.score) / divisor;
+        if (result.codepage == "utf8") logit += utf8Bonus;
         joint[{result.decoding, result.language}] = logit;
         best = std::max(best, logit);
     }
@@ -306,10 +330,14 @@ Detector::detectAuto(const std::vector<std::string>& isos, std::string_view byte
         }), codes.end());
     std::vector<DetectionResult> results;
     auto unicode = detectUnicode(bytes);
-    // Valid UTF-8 with only a few multi-byte sequences (ICU confidence 80)
-    // may as well be legacy text, e.g. Polish "Ół" in cp1250 is valid UTF-8;
-    // then UTF-8 is one more candidate decoding for the language models.
-    const bool weakUtf8 = model && unicode && unicode->codepage == "utf8" && unicode->score < 1;
+    // Valid UTF-8 may also be legacy text, e.g. Polish "Ół" in cp1250 is
+    // valid UTF-8. Without a BOM it is one more candidate decoding for the
+    // language models, favoured by utf8Evidence for every multi-byte sequence.
+    // (Checked here: for short text ICU's best guess may be another charset.)
+    const bool bom = bytes.substr(0, 3) == "\xEF\xBB\xBF";
+    const size_t sequences = model && !bom ? utf8Sequences(bytes) : 0;
+    const bool weakUtf8 = sequences > 0;
+    const double utf8Bonus = sequences * utf8Evidence;
     if (unicode && !weakUtf8) {
         unicode->confidence = unicode->score;
         if (!model) return {*unicode};
@@ -369,7 +397,7 @@ Detector::detectAuto(const std::vector<std::string>& isos, std::string_view byte
     std::unordered_set<std::string> verified{"utf8"};
     for (bool changed = true; changed;) {
         changed = false;
-        assignConfidence(results, tokens, evidenceDivisor);
+        assignConfidence(results, tokens, evidenceDivisor, utf8Bonus);
         sortResults(results);
         double covered = 0;
         std::unordered_set<int> counted;

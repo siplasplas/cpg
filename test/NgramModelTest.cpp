@@ -271,8 +271,11 @@ TEST_F(NgramFixture, DetectionAmongLanguagesConsidersOnlyThoseLanguages) {
         EXPECT_TRUE(result.language == "pl" || result.language == "cz") << result.language;
     auto unicode = detector.detectCodepageAmong({"pl", "cz"}, manager.getByName("utf8")->fromU32(
         U"Dzień dobry. Przesyłam zestawienie kosztów za wrzesień."));
-    ASSERT_EQ(unicode.size(), 2u);
+    ASSERT_FALSE(unicode.empty());
+    EXPECT_EQ(unicode.front().codepage, "utf8");
     EXPECT_EQ(unicode.front().language, "pl");
+    for (const auto& result : unicode)
+        EXPECT_TRUE(result.language == "pl" || result.language == "cz") << result.language;
     // One language behaves like the known-language overload; auto means all.
     auto single = detector.detectCodepageAmong({"pl"}, bytes);
     auto known = detector.detectCodepage("pl", bytes);
@@ -303,8 +306,15 @@ TEST_F(NgramFixture, DetectorUsesModelAfterUnicodeAndRejectsDroppedBytes) {
     EXPECT_EQ(results.front().codepage, "cp1250");
     EXPECT_DOUBLE_EQ(results.front().score, model.score("pl", text));
     auto unicode = detector.detectCodepage("pl", manager.getByName("utf8")->fromU32(text));
-    ASSERT_EQ(unicode.size(), 1u);
+    // UTF-8 competes with the legacy decodings and wins by far.
+    ASSERT_FALSE(unicode.empty());
     EXPECT_EQ(unicode.front().codepage, "utf8");
+    EXPECT_GE(unicode.front().confidence, 0.999);
+    EXPECT_EQ(Detector::plausible(unicode).size(), 1u);
+    // With a BOM it is UTF-8 without competition.
+    auto bom = detector.detectCodepage("pl", "\xEF\xBB\xBF" + manager.getByName("utf8")->fromU32(text));
+    ASSERT_EQ(bom.size(), 1u);
+    EXPECT_EQ(bom.front().codepage, "utf8");
     auto bytes = cp1250->fromU32(text) + char(0x81);
     auto damaged = detector.detectCodepage("pl", bytes);
     auto it = std::find_if(damaged.begin(), damaged.end(), [](const auto& r) { return r.codepage == "cp1250"; });

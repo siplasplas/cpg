@@ -302,6 +302,8 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
     Detector baseline(manager, languages), trained(manager, languages, &model);
     if (options.count("--evidence-divisor"))
         trained.setEvidenceDivisor(decimal(options, "--evidence-divisor", 8, 0.01, 1000));
+    if (options.count("--utf8-evidence"))
+        trained.setUtf8Evidence(decimal(options, "--utf8-evidence", 2, 0, 1000));
     Metrics total;
     // Calibration: does a winner with confidence c give the right text in a
     // fraction c of the samples?
@@ -319,6 +321,7 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
             info = readCorpus(testFiles.at(iso), iso, nullptr, true);
         }
         auto names = candidates(iso, languages, manager);
+        names.push_back("utf8"); // UTF-8 competes with the legacy encodings
         std::map<std::pair<std::string, size_t>, Metrics> rows;
         std::map<std::pair<std::string, size_t>, size_t> languageHits;
         std::mt19937_64 random(hashBytes(iso));
@@ -345,7 +348,7 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
                     auto encoded = cp->fromU32(text);
                     // Strict roundtrip: never evaluate '?' replacement or a
                     // lossy custom mapping as a correctly encoded sample.
-                    if (encoded.size() != text.size() || cp->toU32(encoded) != text) {
+                    if ((name != "utf8" && encoded.size() != text.size()) || cp->toU32(encoded) != text) {
                         ++row.skipped;
                         continue;
                     }
@@ -502,6 +505,7 @@ void help() {
         "                       [--test-corpus DIR] (fixed test set for comparing corpus sizes)\n"
         "                       [--mode known|auto] (default: known)\n"
         "                       [--evidence-divisor X] (default: 8; confidence calibration)\n"
+        "                       [--utf8-evidence X] (default: 2 nats per UTF-8 sequence)\n"
         "                       [--ascii-context FILE] (2048 ASCII bytes around each sample)\n"
         "  cpg_corpus detect --model MODEL_OR_DIR --input FILE [--lang ISO[,ISO...]|auto]\n"
         "                    [--output UTF8_FILE] [--min-confidence 0..1] (default: 0.95)\n"
@@ -523,7 +527,7 @@ int main(int argc, char** argv) {
         if (command == "train") allowed.insert({"--corpus", "--output", "--keep-percent", "--format"});
         else if (command == "compact") allowed.insert({"--model", "--output", "--keep-percent", "--format"});
         else if (command == "split") allowed.insert({"--model", "--output-dir", "--keep-percent", "--format"});
-        else if (command == "benchmark") allowed.insert({"--corpus", "--model", "--output", "--samples", "--test-corpus", "--mode", "--manifest", "--evidence-divisor", "--ascii-context"});
+        else if (command == "benchmark") allowed.insert({"--corpus", "--model", "--output", "--samples", "--test-corpus", "--mode", "--manifest", "--evidence-divisor", "--ascii-context", "--utf8-evidence"});
         else if (command == "detect") allowed.insert({"--model", "--input", "--output", "--min-confidence"});
         else throw std::runtime_error("Unknown command: " + command);
         Options options;

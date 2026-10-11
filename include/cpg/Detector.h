@@ -27,6 +27,7 @@ class Detector {
     Languages& languages;
     const NgramModel* model;
     double evidenceDivisor = 8;
+    double utf8Evidence = 2;
     // Language + encoding detection among model languages; empty = all.
     std::vector<DetectionResult> detectAuto(const std::vector<std::string>& isos,
                                             std::string_view bytes);
@@ -34,7 +35,7 @@ public:
     Detector(CpManager& cpm, Languages& langs, const NgramModel* model = nullptr);
 
     // First accept ICU's best match if it is valid UTF-8/16/32 with confidence
-    // >= 80 (language-independent); UTF-8 with only a few multi-byte sequences
+    // >= 80 (language-independent); with a model, UTF-8 without a BOM
     // competes with the legacy candidates instead. Otherwise rank the
     // language's codepages by model likelihood when available, otherwise
     // alphabet coverage. The optional model must outlive the detector.
@@ -65,6 +66,10 @@ public:
     // rare characters (foreign names, symbols) mislead the model, so the raw
     // ratio is overconfident. Default 8, from held-out corpus samples.
     void setEvidenceDivisor(double divisor) { evidenceDivisor = divisor; }
+    // Valid UTF-8 without a BOM competes with the legacy decodings; each of
+    // its multi-byte sequences adds this many nats (log odds) for UTF-8,
+    // since such sequences rarely arise by chance in legacy text.
+    void setUtf8Evidence(double nats) { utf8Evidence = nats; }
 
     // Exposed for testing / external use
     static int codepageRank(const std::string& name);
