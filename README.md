@@ -170,10 +170,16 @@ Notes for the dialog:
   bytes that differ), so every option shows a different text.
 - The preview shows only lines where the options differ, ordered by the
   number of differing bytes, then by position. It deliberately does not order
-  lines by how strongly they speak against the most likely option: when the
-  model is wrong, such an order would put misleading lines first and steer
-  the person towards the wrong choice. The person should judge the plain
-  differences.
+  lines by how strongly they speak against the most likely option. Such
+  lines are often not representative: a cp1250 file may contain a little
+  text in another encoding (a pasted CP852 or UTF-8 fragment), or the model
+  may simply be wrong. Shown first, they would steer the person towards an
+  encoding that is wrong for most of the file. The person should judge the
+  plain differences.
+- One encoding is chosen for the whole file. In a mixed file the minority
+  fragments stay garbled after opening (a cp1250 file with some UTF-8 is not
+  valid UTF-8, so cp1250 wins and the UTF-8 letters appear as "Ä…" etc.);
+  confidence describes the file as a whole, not every line.
 - Model-invisible differences, such as letter case only ("przenieśc" /
   "przenieŚc"), are obvious in the preview.
 - Pure ASCII and empty files are certain: every encoding gives the same text.
