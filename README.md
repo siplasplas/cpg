@@ -64,7 +64,13 @@ cp1250: "ś" / "Ś") tie, but are obvious in the preview.
 The log likelihood ratio is divided by an evidence divisor (default 8,
 `setEvidenceDivisor`) chosen on held-out corpus samples: the raw ratio is
 overconfident because neighbouring characters are not independent and rare
-characters (foreign names, symbols) mislead the model.
+characters (foreign names, symbols) mislead the model. Two additions see what
+the lowercase model cannot: every lowercase letter directly followed by an
+uppercase one ("przenieŚc", typical of a wrong codepage) costs 2 nats
+(`setCasePenalty`), and every `codepageRank` level above 1 (Windows/ISO)
+costs 0.5 nats (`setRarityPenalty`), a prior that Amiga, SMC or CorelDraw
+encodings are rarer than cp1250. A larger prior makes more ordinary files
+confident but exotic ones confidently wrong more often.
 
 ```cpp
 CpManager codepages;
@@ -318,16 +324,20 @@ guarantee improvement; examine individual languages and sample lengths.
 `.csv.calibration.csv` groups the model's winners by confidence: in a
 calibrated detector about a fraction `c` of the winners with confidence `c`
 give the right text. The tool prints how many winners reached 0.95 and how
-many of those were wrong. `--evidence-divisor X` and `--utf8-evidence X` try
-other values; `--ascii-context FILE` embeds every sample in 2048 ASCII bytes
+many of those were wrong, also by the rank of the true codepage.
+`--evidence-divisor X`, `--utf8-evidence X`, `--case-penalty X` and
+`--rarity-penalty X` try other values; `--ascii-context FILE` embeds every sample in 2048 ASCII bytes
 before and after (mostly ASCII files such as source code), and
 `.csv.errors.txt` lists the confident but wrong winners. Every language's
 samples are also encoded in UTF-8, which competes with the legacy encodings.
 
 Measured on held-out lines of the 20MB corpus (32 languages, 32–2048
 characters, known and automatic language, plain and in ASCII context):
-winners with confidence ≥ 0.95 are right in 99.6–99.8% of cases, UTF-8
-samples are decoded correctly in 99.98–100%. A UTF-8 evidence of 5 nats per
+with the default settings 88–93% of the winners reach confidence 0.95, and
+99.92–99.97% of those are right (winners between 0.95 and 0.99 alone: 99.6–99.8%).
+UTF-8 samples are decoded correctly in 99.98–100%. A rarity prior of 1 nat
+instead of 0.5 raised the confidently wrong exotic-codepage samples from
+about 17 to about 110. A UTF-8 evidence of 5 nats per
 sequence would let legacy Polish capitals that happen to be valid UTF-8
 (e.g. "WRÓŻKA" in cp1250) win confidently; 2 does not.
 

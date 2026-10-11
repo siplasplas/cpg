@@ -304,6 +304,14 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
         trained.setEvidenceDivisor(decimal(options, "--evidence-divisor", 8, 0.01, 1000));
     if (options.count("--utf8-evidence"))
         trained.setUtf8Evidence(decimal(options, "--utf8-evidence", 2, 0, 1000));
+    if (options.count("--case-penalty"))
+        trained.setCasePenalty(decimal(options, "--case-penalty", 0, 0, 1000));
+    if (options.count("--rarity-penalty"))
+        trained.setRarityPenalty(decimal(options, "--rarity-penalty", 0, 0, 1000));
+    // By the true codepage's rank: a rarity prior helps common codepages at
+    // the expense of exotic ones.
+    struct RankCell { size_t samples = 0, correct = 0, confident = 0, confidentWrong = 0; };
+    std::map<int, RankCell> byRank;
     Metrics total;
     // Calibration: does a winner with confidence c give the right text in a
     // fraction c of the samples?
@@ -385,6 +393,11 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
                         bool correct = newCp && newCp->toU32(encoded) == text;
                         cell.correct += correct;
                         cell.confidence += confidence;
+                        auto& rankCell = byRank[Detector::codepageRank(name)];
+                        ++rankCell.samples;
+                        rankCell.correct += correct;
+                        rankCell.confident += confidence >= 0.95;
+                        rankCell.confidentWrong += confidence >= 0.95 && !correct;
                         if (!correct && confidence >= 0.95) {
                             auto* utf8 = manager.getByName("utf8");
                             errors << iso << ' ' << name << ' ' << length << " -> " << newName << '/'
@@ -434,6 +447,9 @@ void benchmark(const Options& options, Languages& languages, CpManager& manager)
     }
     calibrationReport.close();
     if (!calibrationReport) throw std::runtime_error("Failed writing calibration");
+    for (const auto& [rank, cell] : byRank)
+        std::cout << "rank=" << rank << " samples=" << cell.samples << " correct=" << cell.correct
+                  << " confident=" << cell.confident << " confident_wrong=" << cell.confidentWrong << '\n';
     for (const auto& [length, cell] : confident)
         std::cout << "bytes=" << length << " confident=" << cell.count
                   << " confident_wrong=" << cell.count - cell.correct << '\n';
@@ -515,6 +531,7 @@ void help() {
         "                       [--mode known|auto] (default: known)\n"
         "                       [--evidence-divisor X] (default: 8; confidence calibration)\n"
         "                       [--utf8-evidence X] (default: 2 nats per UTF-8 sequence)\n"
+        "                       [--case-penalty X] [--rarity-penalty X] (nats; see Detector.h)\n"
         "                       [--ascii-context FILE] (2048 ASCII bytes around each sample)\n"
         "  cpg_corpus detect --model MODEL_OR_DIR --input FILE [--lang ISO[,ISO...]|auto]\n"
         "                    [--output UTF8_FILE] [--min-confidence 0..1] (default: 0.95)\n"
@@ -536,7 +553,8 @@ int main(int argc, char** argv) {
         if (command == "train") allowed.insert({"--corpus", "--output", "--keep-percent", "--format"});
         else if (command == "compact") allowed.insert({"--model", "--output", "--keep-percent", "--format"});
         else if (command == "split") allowed.insert({"--model", "--output-dir", "--keep-percent", "--format"});
-        else if (command == "benchmark") allowed.insert({"--corpus", "--model", "--output", "--samples", "--test-corpus", "--mode", "--manifest", "--evidence-divisor", "--ascii-context", "--utf8-evidence"});
+        else if (command == "benchmark") allowed.insert({"--corpus", "--model", "--output", "--samples", "--test-corpus", "--mode", "--manifest", "--evidence-divisor", "--ascii-context", "--utf8-evidence",
+                                                   "--case-penalty", "--rarity-penalty"});
         else if (command == "detect") allowed.insert({"--model", "--input", "--output", "--min-confidence"});
         else throw std::runtime_error("Unknown command: " + command);
         Options options;

@@ -254,6 +254,32 @@ TEST_F(NgramFixture, ConfidenceNeedsEnoughDistinguishingText) {
     EXPECT_DOUBLE_EQ(ascii.front().confidence, 1.0);
 }
 
+TEST_F(NgramFixture, OddLetterCaseAndRarityBreakTiesForCommonCodepages) {
+    NgramModel shipped;
+    shipped.loadDirectory(CPG_MODELS_DIR);
+    CpManager manager;
+    Languages languages;
+    languages.readFromFile(CPG_LANGUAGES_TXT);
+    // SMC differs from cp1250 here only in letter case: "przenieŚc".
+    auto bytes = manager.getByName("cp1250")->fromU32(
+        U"{przenieśc to do wspólnego unitu z okienkami dialogowymi i komunikatami}\n");
+    auto confidenceOf = [&](double casePenalty, double rarityPenalty, const std::string& codepage) {
+        Detector detector(manager, languages, &shipped);
+        detector.setCasePenalty(casePenalty);
+        detector.setRarityPenalty(rarityPenalty);
+        for (const auto& result : detector.detectCodepage("pl", bytes))
+            if (result.codepage == codepage) return result.confidence;
+        return 0.0;
+    };
+    EXPECT_NEAR(confidenceOf(0, 0, "cp1250"), confidenceOf(0, 0, "smc"), 1e-9); // the model alone ties
+    EXPECT_GT(confidenceOf(2, 0, "cp1250"), 0.8);
+    EXPECT_GT(confidenceOf(2, 0.5, "cp1250"), confidenceOf(2, 0, "cp1250"));
+    Detector detector(manager, languages, &shipped); // defaults: 2 and 0.5
+    auto results = detector.detectCodepage("pl", bytes);
+    ASSERT_FALSE(results.empty());
+    EXPECT_EQ(results.front().codepage, "cp1250");
+}
+
 TEST_F(NgramFixture, PreviewShowsWhereOptionsDiffer) {
     CpManager manager;
     Languages languages;

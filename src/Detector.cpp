@@ -14,6 +14,7 @@
 #include <unicode/ucnv.h>
 #include <unicode/ucnv_err.h>
 #include <unicode/ucsdet.h>
+#include <unicode/uchar.h>
 
 namespace {
 
@@ -146,18 +147,22 @@ void sortResults(std::vector<DetectionResult>& results) {
 // Posterior probabilities with equal priors for every (decoding, language)
 // pair: P ~ score^(tokens / divisor). Candidates sharing a decoding and
 // language have the same score and count once. confidence = P(decoding),
-// languageConfidence = P(language) over all decodings. `utf8Bonus` (natural
-// log of odds) favours the UTF-8 decoding: valid multi-byte sequences rarely
-// arise by chance in legacy text.
+// languageConfidence = P(language) over all decodings. `bonus` adds log odds
+// (nats) per decoding, e.g. for valid UTF-8 or against odd letter case.
+// `rarityPenalty` nats per codepageRank level above 1 express that exotic
+// codepages are rarer than Windows/ISO ones; a decoding shared by several
+// codepages counts with its most common one.
 void assignConfidence(std::vector<DetectionResult>& results, size_t tokens, double divisor,
-                      double utf8Bonus = 0) {
+                      const std::map<int, double>& bonus = {}, double rarityPenalty = 0) {
     std::map<std::pair<int, std::string>, double> joint;
     double best = -std::numeric_limits<double>::infinity();
     for (const auto& result : results) {
         if (result.score <= 0) continue;
-        double logit = tokens * std::log(result.score) / divisor;
-        if (result.codepage == "utf8") logit += utf8Bonus;
-        joint[{result.decoding, result.language}] = logit;
+        double logit = tokens * std::log(result.score) / divisor -
+                       rarityPenalty * std::max(0, result.rank - 1);
+        if (auto it = bonus.find(result.decoding); it != bonus.end()) logit += it->second;
+        auto [entry, inserted] = joint.try_emplace({result.decoding, result.language}, logit);
+        if (!inserted) entry->second = std::max(entry->second, logit);
         best = std::max(best, logit);
     }
     std::map<int, double> decodings;
@@ -175,6 +180,17 @@ void assignConfidence(std::vector<DetectionResult>& results, size_t tokens, doub
         result.confidence = decodings[result.decoding] / total;
         result.languageConfidence = languages[result.language] / total;
     }
+}
+
+// Lowercase letters directly followed by uppercase ones inside a word, e.g.
+// "przenieŚc" or "ŚwIEŻY": typical of a wrong codepage that maps a letter
+// to the other case, rare in real text. The model compares lowercase text
+// and cannot see it. ASCII camelCase is the same in every decoding.
+size_t oddCase(std::u32string_view text) {
+    size_t count = 0;
+    for (size_t i = 1; i < text.size(); ++i)
+        count += u_islower(static_cast<UChar32>(text[i - 1])) && u_isupper(static_cast<UChar32>(text[i]));
+    return count;
 }
 
 constexpr size_t samplePart = 2048;
@@ -367,6 +383,7 @@ Detector::detectAuto(const std::vector<std::string>& isos, std::string_view byte
     const auto sample = nonAsciiSample<char>(bytes);
     std::unordered_map<std::string, std::u32string> decoded;
     std::map<std::u32string, int> decodings;
+    std::map<int, double> bonus; // log odds per decoding: valid UTF-8, odd letter case
     size_t tokens = 0;
     for (const auto& iso : codes) {
         if (!languages.getByIsoCode(iso)) continue;
@@ -388,7 +405,11 @@ Detector::detectAuto(const std::vector<std::string>& isos, std::string_view byte
             if (name != "utf8" && it->second.size() != sample.size()) continue;
             auto score = model->score(iso, it->second);
             DetectionResult result{name, score, codepageRank(name), iso, score};
-            result.decoding = decodings.emplace(it->second, static_cast<int>(decodings.size())).first->second;
+            auto [entry, added] = decodings.emplace(it->second, static_cast<int>(decodings.size()));
+            result.decoding = entry->second;
+            if (added)
+                bonus[result.decoding] = (name == "utf8" ? utf8Bonus : 0) -
+                                         casePenalty * static_cast<double>(oddCase(it->second));
             results.push_back(result);
         }
     }
@@ -398,7 +419,7 @@ Detector::detectAuto(const std::vector<std::string>& isos, std::string_view byte
     std::unordered_set<std::string> verified{"utf8"};
     for (bool changed = true; changed;) {
         changed = false;
-        assignConfidence(results, tokens, evidenceDivisor, utf8Bonus);
+        assignConfidence(results, tokens, evidenceDivisor, bonus, rarityPenalty);
         sortResults(results);
         double covered = 0;
         std::unordered_set<int> counted;

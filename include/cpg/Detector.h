@@ -34,6 +34,8 @@ class Detector {
     const NgramModel* model;
     double evidenceDivisor = 8;
     double utf8Evidence = 2;
+    double casePenalty = 2;
+    double rarityPenalty = 0.5;
     // Language + encoding detection among model languages; empty = all.
     std::vector<DetectionResult> detectAuto(const std::vector<std::string>& isos,
                                             std::string_view bytes);
@@ -87,6 +89,15 @@ public:
     // its multi-byte sequences adds this many nats (log odds) for UTF-8,
     // since such sequences rarely arise by chance in legacy text.
     void setUtf8Evidence(double nats) { utf8Evidence = nats; }
+    // Nats against a decoding for every lowercase letter directly followed by
+    // an uppercase one ("przenieŚc"), which the lowercase model cannot see.
+    // Default 2: more right and confident winners on held-out text at no cost.
+    void setCasePenalty(double nats) { casePenalty = nats; }
+    // Nats against a codepage for every codepageRank level above 1
+    // (Windows/ISO): a prior that exotic codepages are rarer. Default 0.5;
+    // higher values make more common-codepage files confident, but also make
+    // exotic ones (Amiga, SMC, ...) confidently wrong more often.
+    void setRarityPenalty(double nats) { rarityPenalty = nats; }
 
     // Exposed for testing / external use
     static int codepageRank(const std::string& name);
