@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.26)
-project(cpg VERSION 1.2.0)
+project(cpg VERSION 1.3.0)
+
+# The binary interface: changes whenever a class's layout, a virtual function
+# or a signature does (not with every version). The shared library's SONAME
+# is libcpg.so.<ABI>; see include/cpg/Version.h (cmake/Version.h.in).
+set(CPG_ABI_VERSION 1)
 
 add_definitions("-Werror=return-type -Werror=unused-result")
 
@@ -11,12 +16,23 @@ set(CMAKE_CXX_STANDARD 17)
 option(CPG_BUILD_TOOLS "Build convcp, tableCreator and cpg_corpus" ${PROJECT_IS_TOP_LEVEL})
 option(CPG_BUILD_TESTS "Build unit tests" ${PROJECT_IS_TOP_LEVEL})
 option(CPG_INSTALL "Generate install rules" ${PROJECT_IS_TOP_LEVEL})
+# A shared library (libcpg.so.<ABI>) when built on its own, so that every
+# program and plugin of a process uses one copy; static when fetched by a
+# parent project, unless it asks otherwise.
+option(CPG_SHARED "Build cpg as a shared library" ${PROJECT_IS_TOP_LEVEL})
 
 find_package(ICU REQUIRED COMPONENTS uc i18n)
 find_package(ZLIB REQUIRED)
 
 # Biblioteka cpg
-add_library(cpg STATIC
+if(CPG_SHARED)
+    set(CPG_LIBRARY_TYPE SHARED)
+else()
+    set(CPG_LIBRARY_TYPE STATIC)
+endif()
+configure_file(cmake/Version.h.in ${CMAKE_CURRENT_BINARY_DIR}/include/cpg/Version.h @ONLY)
+add_library(cpg ${CPG_LIBRARY_TYPE}
+        src/Version.cpp
         src/Codepage.cpp
         src/TableCodepage.cpp
         src/BigTableCodepage.cpp
@@ -30,8 +46,17 @@ add_library(cpg STATIC
 
 target_include_directories(cpg PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
         $<INSTALL_INTERFACE:include>)
-target_link_libraries(cpg PUBLIC ICU::uc ICU::i18n ZLIB::ZLIB)
+# The headers do not show ICU nor zlib (a static cpg still brings them to
+# the program's link).
+target_link_libraries(cpg PRIVATE ICU::uc ICU::i18n ZLIB::ZLIB)
+# Position-independent also when static, so that it can go into a shared
+# object (a plugin).
+set_target_properties(cpg PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        VERSION ${PROJECT_VERSION}
+        SOVERSION ${CPG_ABI_VERSION})
 add_library(cpg::cpg ALIAS cpg)
 
 # Runtime data for detection: language metadata and n-gram models. A parent
@@ -54,7 +79,7 @@ if(CPG_BUILD_TOOLS)
     target_link_libraries(tableCreator cpg)
 
     add_executable(cpg_corpus tools/corpus.cpp)
-    target_link_libraries(cpg_corpus cpg)
+    target_link_libraries(cpg_corpus cpg ICU::uc)  # uses ICU itself too
     target_compile_definitions(cpg_corpus PRIVATE
             CPG_LANGUAGES_TXT="${CMAKE_CURRENT_SOURCE_DIR}/languages.txt")
 endif()
@@ -68,6 +93,8 @@ if(CPG_INSTALL)
             ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
             LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
     install(DIRECTORY include/cpg DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/include/cpg/Version.h
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/cpg)
     install(FILES languages.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/cpg)
     install(DIRECTORY data/models/ DESTINATION ${CMAKE_INSTALL_DATADIR}/cpg/models
             FILES_MATCHING PATTERN "*.ngram")
@@ -89,6 +116,7 @@ if(CPG_BUILD_TESTS)
     find_package(GTest REQUIRED)
     enable_testing()
     add_executable(cpg_tests
+            test/VersionTest.cpp
             test/UtfCodepageTest.cpp
             test/CpManagerTest.cpp
             test/ConverterTest.cpp

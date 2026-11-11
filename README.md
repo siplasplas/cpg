@@ -246,12 +246,14 @@ The older `Codepage::toU32/fromU32` API retains its existing lossy behavior; use
 
 ## Using cpg from CMake
 
-`cmake --install` installs the static library, the headers, and the detection
-data (`share/cpg/languages.txt`, `share/cpg/models/*.ngram`) with a CMake
-package. ICU (uc, i18n) and zlib are required by consumers as well.
+`cmake --install` installs the shared library (`libcpg.so.<ABI>`, since 1.3.0;
+before, a static one), the headers, and the detection data
+(`share/cpg/languages.txt`, `share/cpg/models/*.ngram`) with a CMake package.
+One shared copy serves every program and plugin of a process. ICU (uc, i18n)
+and zlib are linked by the library; the headers do not use them.
 
 ```cmake
-find_package(cpg 1.2 REQUIRED)
+find_package(cpg 1.3 REQUIRED)
 target_link_libraries(app PRIVATE cpg::cpg)
 # Paths of the detection data, e.g. for a compile definition:
 #   CPG_LANGUAGES_FILE  -> .../share/cpg/languages.txt
@@ -260,8 +262,24 @@ target_link_libraries(app PRIVATE cpg::cpg)
 
 The same target and variables are available after `add_subdirectory` or
 `FetchContent_MakeAvailable`, pointing into the source tree. As a subproject cpg
-builds only the library: `CPG_BUILD_TOOLS`, `CPG_BUILD_TESTS` and `CPG_INSTALL`
-default to ON only when cpg is the top-level project.
+builds only the library, static unless the parent sets `CPG_SHARED`:
+`CPG_BUILD_TOOLS`, `CPG_BUILD_TESTS`, `CPG_INSTALL` and `CPG_SHARED` default
+to ON only when cpg is the top-level project. The library is
+position-independent also when static, so it can go into a plugin.
+
+### Versions and the binary interface
+
+`<cpg/Version.h>` gives the version a program is built with
+(`CPG_VERSION_MAJOR`, `_MINOR`, `_PATCH`, `CPG_VERSION_STRING`) and
+`CPG_ABI_VERSION`, the binary interface. `cpg::libraryVersion()` tells the
+version of the library running, and `cpg::libraryFits()` whether it fits the
+headers: the same ABI, and the same version or a newer one.
+
+The ABI number changes whenever the binary interface does (a class's layout,
+a virtual function, a signature), not with every version; it is the shared
+library's SONAME (`libcpg.so.1`), so the system loads no library of another
+ABI. Within one ABI a newer library only adds things, and programs built for
+an older one keep working with it.
 
 ## Corpus training and evaluation
 
