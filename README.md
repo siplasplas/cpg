@@ -250,7 +250,10 @@ The older `Codepage::toU32/fromU32` API retains its existing lossy behavior; use
 before, a static one), the headers, and the detection data
 (`share/cpg/languages.txt`, `share/cpg/models/*.ngram`) with a CMake package.
 One shared copy serves every program and plugin of a process. ICU (uc, i18n)
-and zlib are linked by the library; the headers do not use them.
+and zlib are linked by the library; the headers do not use them. Installing
+into the system (`sudo cmake --install`) also refreshes the dynamic linker's
+cache (`ldconfig`), so that programs find the new library at once; for
+packaging (`DESTDIR`) it does not.
 
 ```cmake
 find_package(cpg 1.3 REQUIRED)

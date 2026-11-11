@@ -109,6 +109,26 @@ if(CPG_INSTALL)
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/cpgConfig.cmake
             ${CMAKE_CURRENT_BINARY_DIR}/cpgConfigVersion.cmake
             DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/cpg)
+    # A shared library installed straight into the system: the dynamic
+    # linker's cache is refreshed (ldconfig), or programs do not find the new
+    # library until it is. Skipped for packaging (DESTDIR); a failure (e.g.
+    # not root, for a prefix in the home directory) is only reported.
+    if(CPG_SHARED AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        install(CODE [[
+            if("$ENV{DESTDIR}" STREQUAL "")
+                find_program(cpg_ldconfig ldconfig PATHS /sbin /usr/sbin)
+                if(cpg_ldconfig)
+                    execute_process(COMMAND "${cpg_ldconfig}" RESULT_VARIABLE cpg_ldconfig_result
+                                    OUTPUT_QUIET ERROR_QUIET)
+                    if(cpg_ldconfig_result EQUAL 0)
+                        message(STATUS "Refreshed the shared library cache (ldconfig)")
+                    else()
+                        message(STATUS "ldconfig failed; if programs do not find libcpg, run: sudo ldconfig")
+                    endif()
+                endif()
+            endif()
+        ]])
+    endif()
 endif()
 
 # Testy (GoogleTest)
